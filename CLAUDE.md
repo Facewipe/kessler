@@ -81,3 +81,8 @@ tests/            # pytest, fixtures in tests/fixtures/
 docs/             # accuracy notes, quickstart
 .github/workflows/ci.yml
 ```
+## Before pushing
+
+Always apply `ruff check --fix .` and `ruff format .` before pushing, and
+fix any failing tests. When fixing CI failures, push to the SAME branch —
+never create a new one.
