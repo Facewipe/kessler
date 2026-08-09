@@ -60,3 +60,9 @@ def get_satellite(conn: sqlite3.Connection, norad_id: int) -> SatelliteRecord | 
     if row is None:
         return None
     return SatelliteRecord(*row)
+
+
+def list_satellites(conn: sqlite3.Connection) -> list[SatelliteRecord]:
+    """Fetch all stored satellite TLE records."""
+    rows = conn.execute("SELECT norad_id, name, line1, line2 FROM satellites").fetchall()
+    return [SatelliteRecord(*row) for row in rows]
