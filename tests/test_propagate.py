@@ -1,6 +1,6 @@
 """Tests for SGP4-based orbit propagation."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -21,7 +21,7 @@ def test_epoch_datetime_matches_tle_epoch_field() -> None:
     satrec = satrec_from_tle(LINE1, LINE2)
 
     epoch = epoch_datetime(satrec)
-    expected = datetime(2000, 6, 27, 18, 50, 19, 733568, tzinfo=timezone.utc)
+    expected = datetime(2000, 6, 27, 18, 50, 19, 733568, tzinfo=UTC)
 
     assert abs((epoch - expected).total_seconds()) < 1e-3
 

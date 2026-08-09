@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
@@ -47,11 +47,11 @@ async def get_position(
         raise HTTPException(status_code=404, detail=f"Unknown norad_id: {norad_id}")
 
     if at is None:
-        when = datetime.now(timezone.utc)
+        when = datetime.now(UTC)
     elif at.tzinfo is None:
-        when = at.replace(tzinfo=timezone.utc)
+        when = at.replace(tzinfo=UTC)
     else:
-        when = at.astimezone(timezone.utc)
+        when = at.astimezone(UTC)
 
     satrec = satrec_from_tle(satellite.line1, satellite.line2)
     epoch = epoch_datetime(satrec)
