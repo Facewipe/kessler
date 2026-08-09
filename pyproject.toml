@@ -27,6 +27,9 @@ packages = ["kessler"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: exercises a larger synthetic catalog (deselect with -m \"not slow\")",
+]
 
 [tool.ruff]
 line-length = 100
