@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
 
-from kessler.db import SatelliteRecord, get_connection, upsert_records
+from kessler.db import CURRENT_SCHEMA_VERSION, SatelliteRecord, get_connection, upsert_records
 
 
 @pytest.fixture
@@ -90,3 +91,95 @@ def test_upsert_same_epoch_counts_as_skipped(conn):
         0
     ]
     assert count == 1
+
+
+def _create_legacy_db(db_path) -> None:
+    """Create a `satellites` table as it existed before epoch_utc/fetched_at."""
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        "CREATE TABLE satellites ("
+        "norad_id INTEGER PRIMARY KEY, name TEXT NOT NULL, "
+        "line1 TEXT NOT NULL, line2 TEXT NOT NULL)"
+    )
+    legacy_conn.execute(
+        "INSERT INTO satellites (norad_id, name, line1, line2) VALUES (?, ?, ?, ?)",
+        (25544, "ISS (ZARYA)", "1 LEGACY LINE ONE", "2 LEGACY LINE TWO"),
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+
+def test_get_connection_migrates_legacy_schema_missing_columns(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    _create_legacy_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT norad_id, name, line1, line2, epoch_utc, fetched_at "
+            "FROM satellites WHERE norad_id = ?",
+            (25544,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == (25544, "ISS (ZARYA)", "1 LEGACY LINE ONE", "2 LEGACY LINE TWO", None, None)
+
+
+def test_get_connection_migration_lets_upsert_use_new_columns(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    _create_legacy_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        record = SatelliteRecord(
+            norad_id=25544,
+            name="ISS (ZARYA)",
+            line1="1 NEW LINE ONE",
+            line2="2 NEW LINE TWO",
+            epoch_utc=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        # Does not raise "no such column: epoch_utc" (the bug this migration fixes).
+        result = upsert_records(conn, [record])
+        assert result.inserted + result.updated == 1
+
+        row = conn.execute(
+            "SELECT epoch_utc FROM satellites WHERE norad_id = ?", (25544,)
+        ).fetchone()
+        assert row[0] == "2024-01-01T00:00:00+00:00"
+    finally:
+        conn.close()
+
+
+def test_get_connection_sets_schema_version_and_is_idempotent(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    _create_legacy_db(db_path)
+
+    first = get_connection(db_path)
+    version = first.execute("PRAGMA user_version").fetchone()[0]
+    first.close()
+    assert version == CURRENT_SCHEMA_VERSION
+
+    # Reopening an already-migrated database must not re-migrate or error.
+    second = get_connection(db_path)
+    try:
+        row = second.execute(
+            "SELECT norad_id, name FROM satellites WHERE norad_id = ?", (25544,)
+        ).fetchone()
+    finally:
+        second.close()
+    assert row == (25544, "ISS (ZARYA)")
+
+
+def test_get_connection_on_fresh_db_creates_current_schema(tmp_path):
+    db_path = tmp_path / "fresh.db"
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(satellites)")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert columns == {"norad_id", "name", "line1", "line2", "epoch_utc", "fetched_at"}
+    assert version == CURRENT_SCHEMA_VERSION

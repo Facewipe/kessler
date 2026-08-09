@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_DB_PATH = "kessler.db"
+
+# Bumped whenever `_SCHEMA` changes in a way existing on-disk databases need
+# to migrate to (new/renamed/removed columns). Checked against SQLite's
+# built-in `PRAGMA user_version` so migrations only run once per database.
+CURRENT_SCHEMA_VERSION = 1
+
+_EXPECTED_COLUMNS = ("norad_id", "name", "line1", "line2", "epoch_utc", "fetched_at")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS satellites (
@@ -42,7 +52,7 @@ class UpsertResult:
 
 
 def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Open a SQLite connection to `db_path`, creating the schema if needed.
+    """Open a SQLite connection to `db_path`, creating or migrating the schema as needed.
 
     `check_same_thread=False` because callers (the FastAPI dependency and
     test fixtures via `TestClient`) may hand a single connection across
@@ -50,9 +60,51 @@ def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     concurrently, only sequentially, so relaxing the check is safe.
     """
     conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.execute(_SCHEMA)
-    conn.commit()
+    _ensure_schema_current(conn)
     return conn
+
+
+def _ensure_schema_current(conn: sqlite3.Connection) -> None:
+    """Create the `satellites` table if missing, or migrate it if out of date.
+
+    A pre-existing database created before `epoch_utc`/`fetched_at` were
+    added has no way to pick those columns up via `CREATE TABLE IF NOT
+    EXISTS`, which silently no-ops on an already-existing table. Track the
+    schema generation with SQLite's built-in `PRAGMA user_version` so this
+    check is a cheap integer comparison on the common case (already
+    migrated), and only fall back to inspecting `PRAGMA table_info` -- and
+    rebuilding the table -- when the version is behind.
+    """
+    conn.execute(_SCHEMA)
+
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < CURRENT_SCHEMA_VERSION:
+        existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(satellites)")}
+        if not set(_EXPECTED_COLUMNS).issubset(existing_columns):
+            _migrate_satellites_table(conn)
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+
+    conn.commit()
+
+
+def _migrate_satellites_table(conn: sqlite3.Connection) -> None:
+    """Rebuild `satellites` under the current schema, preserving compatible data."""
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(satellites)")}
+    common_columns = [c for c in _EXPECTED_COLUMNS if c in existing_columns]
+
+    conn.execute("ALTER TABLE satellites RENAME TO satellites_old")
+    conn.execute(_SCHEMA)
+    if common_columns:
+        columns_sql = ", ".join(common_columns)
+        conn.execute(
+            f"INSERT INTO satellites ({columns_sql}) SELECT {columns_sql} FROM satellites_old"
+        )
+    conn.execute("DROP TABLE satellites_old")
+    logger.info(
+        "Migrated satellites table to schema version %d (kept columns: %s)",
+        CURRENT_SCHEMA_VERSION,
+        ", ".join(common_columns),
+    )
 
 
 def upsert_satellite(conn: sqlite3.Connection, record: SatelliteRecord) -> None:
