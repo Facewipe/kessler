@@ -1,31 +1,75 @@
 # kessler
-Satellite conjunction screening API built on open orbital data
+Satellite conjunction screening API built on open orbital data (Celestrak),
+propagated via SGP4. Geometric miss distance only — see
+[`docs/accuracy.md`](docs/accuracy.md) for what that means and why it's not
+a collision probability.
 
-## Development setup
+## Quickstart
 
 ```bash
-pip install -e ".[dev]"      # setup
-pytest                        # tests
+# 1. Install
+pip install -e ".[dev]"
+
+# 2. Seed a demo satellite into SQLite
+# (python -m kessler.ingest, which fetches the live Celestrak catalog, is
+# still a WIP stub — this seeds one pinned reference TLE so you have data
+# to query right away. Its epoch is from 2000, so position queries will
+# report `stale: true` unless you pass an `at` near that epoch — that's
+# expected, and a good demonstration of the staleness flag itself.)
+python -c "
+from kessler.db import SatelliteRecord, get_connection, upsert_satellite
+
+conn = get_connection('kessler.db')
+upsert_satellite(conn, SatelliteRecord(
+    norad_id=5,
+    name='SGP4-VER TEST SATELLITE 5',
+    line1='1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753',
+    line2='2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667',
+))
+"
+
+# 3. Run
+uvicorn kessler.api:app --reload
+```
+
+Dev commands:
+
+```bash
+pytest                                  # tests
 ruff check . && ruff format --check .   # lint
-uvicorn kessler.api:app --reload        # run locally
-python -m kessler.ingest      # fetch TLE catalog into SQLite
+python -m kessler.ingest                # fetch TLE catalog into SQLite (WIP)
 ```
 
 ## API
 
+Interactive OpenAPI docs (with request/response examples) are served at
+`/docs` once the app is running.
+
+### Check service health
+
+```bash
+curl "http://localhost:8000/health"
+```
+
+```json
+{"status": "ok"}
+```
+
 ### Get a satellite's current position
 
 ```bash
-curl "http://localhost:8000/satellites/25544/position"
+# 5 is the demo satellite seeded in the quickstart above
+curl "http://localhost:8000/satellites/5/position"
 ```
 
 Optionally pass an ISO 8601 UTC timestamp via `at` (defaults to now):
 
 ```bash
-curl "http://localhost:8000/satellites/25544/position?at=2026-08-09T12:00:00Z"
+curl "http://localhost:8000/satellites/5/position?at=2000-06-27T18:00:00Z"
 ```
 
-Example response:
+Example response (illustrative — for a satellite with a fresher TLE than the
+demo's pinned 2000-epoch one):
 
 ```json
 {
@@ -53,14 +97,17 @@ timestamp.
 ### Screen a satellite for conjunctions
 
 ```bash
-curl "http://localhost:8000/conjunctions/25544?hours=72&threshold_km=10"
+# 5 is the demo satellite seeded in the quickstart above; with only one
+# satellite in the catalog this returns an empty "conjunctions" list — seed
+# a second satellite to see a match.
+curl "http://localhost:8000/conjunctions/5?hours=72&threshold_km=10"
 ```
 
 `hours` (1-168, default 72) sets the screening window length from now;
 `threshold_km` (1-50, default 10) sets both the coarse orbit-overlap buffer
 and the candidate miss-distance bound.
 
-Example response:
+Example response (illustrative, with a fuller catalog):
 
 ```json
 {
@@ -92,3 +139,44 @@ collision probability.
 
 Returns `404` for an unknown `norad_id` and `422` for `hours` or
 `threshold_km` outside their allowed ranges.
+
+## Authentication
+
+By default the API is open (dev mode) — no key required. To require an API
+key, set `KESSLER_API_KEYS` to a comma-separated list of accepted keys
+before starting the app:
+
+```bash
+export KESSLER_API_KEYS="dev-key-1,dev-key-2"
+uvicorn kessler.api:app --reload
+```
+
+Once set, every endpoint except `/health` requires an `X-API-Key` header
+matching one of the configured keys:
+
+```bash
+curl "http://localhost:8000/satellites/5/position" -H "X-API-Key: dev-key-1"
+```
+
+Requests without a valid key get `401 Unauthorized`. Leaving
+`KESSLER_API_KEYS` unset keeps the API fully open, which is the default for
+local development.
+
+## Python example
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+# Only needed if KESSLER_API_KEYS is set on the server.
+HEADERS = {"X-API-Key": "dev-key-1"}
+
+response = requests.get(f"{BASE_URL}/satellites/5/position", headers=HEADERS)
+response.raise_for_status()
+position = response.json()
+
+if position["stale"]:
+    print(f"Warning: TLE is {position['epoch_age_hours']:.1f}h old, accuracy may be degraded")
+
+print(f"{position['name']}: lat={position['lat']}, lon={position['lon']}, alt_km={position['alt_km']}")
+```

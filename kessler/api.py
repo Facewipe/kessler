@@ -7,20 +7,58 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import screen_catalog
 
-app = FastAPI(title="kessler", description="Satellite conjunction screening API")
+app = FastAPI(
+    title="kessler",
+    description=(
+        "Satellite conjunction screening API built on open orbital data "
+        "(Celestrak GP/TLE data, propagated via SGP4).\n\n"
+        "TLE-based propagation is roughly km-level accurate near a TLE's "
+        "epoch and degrades as the TLE ages; every response reports "
+        "`epoch_age_hours` and flags TLEs older than 72 hours as `stale`. "
+        "Conjunction results report **geometric miss distance only** — "
+        "this is not a collision probability. See `docs/accuracy.md` for "
+        "the full explanation.\n\n"
+        "Set `KESSLER_API_KEYS` (comma-separated) to require an `X-API-Key` "
+        "header on every endpoint except `/health`; leave it unset for open "
+        "(dev-mode) access."
+    ),
+    version="0.1.0",
+)
 
 STALE_THRESHOLD_HOURS = 72.0
+API_KEYS_ENV_VAR = "KESSLER_API_KEYS"
 
 CONJUNCTION_DISCLAIMER = (
     "Geometric screening on public TLEs (SGP4), not a collision probability. "
     "No covariance is used; treat results as a geometric proximity estimate only."
 )
+
+
+def _configured_api_keys() -> set[str]:
+    """Return the configured API keys, or an empty set if auth is disabled."""
+    raw = os.environ.get(API_KEYS_ENV_VAR, "")
+    return {key.strip() for key in raw.split(",") if key.strip()}
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    """Require a valid X-API-Key header when KESSLER_API_KEYS is set.
+
+    `/health` always stays open so uptime checks don't need a key. When
+    KESSLER_API_KEYS is unset, the whole API is open (dev mode).
+    """
+    api_keys = _configured_api_keys()
+    if api_keys and request.url.path != "/health":
+        if request.headers.get("X-API-Key") not in api_keys:
+            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+    return await call_next(request)
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -33,13 +71,43 @@ def get_db() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["health"],
+    summary="Service health check",
+    responses={200: {"content": {"application/json": {"example": {"status": "ok"}}}}},
+)
 async def health() -> dict[str, str]:
-    """Return service health status."""
+    """Return service health status. Always open, even when API keys are configured."""
     return {"status": "ok"}
 
 
-@app.get("/satellites/{norad_id}/position")
+@app.get(
+    "/satellites/{norad_id}/position",
+    tags=["satellites"],
+    summary="Get a satellite's current geodetic position",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "norad_id": 25544,
+                        "name": "ISS (ZARYA)",
+                        "at": "2026-08-09T12:00:00+00:00",
+                        "lat": 12.345678,
+                        "lon": -45.678901,
+                        "alt_km": 420.123,
+                        "epoch_utc": "2026-08-08T03:15:22.123456+00:00",
+                        "epoch_age_hours": 32.744,
+                        "stale": False,
+                    }
+                }
+            }
+        },
+        404: {"description": "Unknown norad_id"},
+        422: {"description": "Invalid `at` timestamp"},
+    },
+)
 async def get_position(
     norad_id: int,
     at: datetime | None = Query(
@@ -82,7 +150,39 @@ async def get_position(
     }
 
 
-@app.get("/conjunctions/{norad_id}")
+@app.get(
+    "/conjunctions/{norad_id}",
+    tags=["conjunctions"],
+    summary="Screen a satellite for conjunctions",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "disclaimer": CONJUNCTION_DISCLAIMER,
+                        "target_norad_id": 25544,
+                        "target_name": "ISS (ZARYA)",
+                        "window_start_utc": "2026-08-09T12:00:00+00:00",
+                        "window_end_utc": "2026-08-12T12:00:00+00:00",
+                        "threshold_km": 10.0,
+                        "conjunctions": [
+                            {
+                                "other_norad_id": 43205,
+                                "other_name": "STARLINK-1007",
+                                "tca_utc": "2026-08-10T03:12:47+00:00",
+                                "miss_distance_km": 3.842,
+                                "target_epoch_age_hours": 5.1,
+                                "other_epoch_age_hours": 12.4,
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+        404: {"description": "Unknown norad_id"},
+        422: {"description": "`hours` or `threshold_km` outside their allowed ranges"},
+    },
+)
 async def get_conjunctions(
     norad_id: int,
     hours: int = Query(default=72, ge=1, le=168, description="Screening window length in hours."),
