@@ -29,8 +29,14 @@ class SatelliteRecord:
 
 
 def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Open a SQLite connection to `db_path`, creating the schema if needed."""
-    conn = sqlite3.connect(db_path)
+    """Open a SQLite connection to `db_path`, creating the schema if needed.
+
+    `check_same_thread=False` because callers (the FastAPI dependency and
+    test fixtures via `TestClient`) may hand a single connection across
+    threads. This app never accesses one connection from multiple threads
+    concurrently, only sequentially, so relaxing the check is safe.
+    """
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute(_SCHEMA)
     conn.commit()
     return conn
