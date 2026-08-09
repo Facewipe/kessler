@@ -1,9 +1,111 @@
 """Fetch TLE catalog data (Celestrak GP data) into local storage."""
 
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+
+import httpx
+
+from kessler.db import TLERecord, get_connection, upsert_records
+
+logger = logging.getLogger(__name__)
+
+CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php"
+DEFAULT_GROUP = "active"
+
+
+def fetch_tle_text(group: str = DEFAULT_GROUP, timeout: float = 30.0) -> str:
+    """Download the Celestrak GP dataset for `group` in 3-line TLE format."""
+    params = {"GROUP": group, "FORMAT": "tle"}
+    response = httpx.get(CELESTRAK_URL, params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
+def _iter_raw_records(text: str) -> list[tuple[str, str, str]]:
+    """Split TLE text into raw `(name, line1, line2)` triples."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    usable = len(lines) - len(lines) % 3
+    return [(lines[i], lines[i + 1], lines[i + 2]) for i in range(0, usable, 3)]
+
+
+def _parse_epoch(epoch_field: str) -> datetime:
+    """Parse a TLE epoch field (`YYDDD.DDDDDDDD`) into a UTC datetime."""
+    year_two_digit = int(epoch_field[0:2])
+    day_of_year = float(epoch_field[2:])
+    year = 2000 + year_two_digit if year_two_digit < 57 else 1900 + year_two_digit
+    return datetime(year, 1, 1, tzinfo=UTC) + timedelta(days=day_of_year - 1)
+
+
+def _parse_record(name: str, line1: str, line2: str) -> TLERecord | None:
+    """Parse a single name/line1/line2 triple, or return `None` if malformed."""
+    display_name = name.strip()
+
+    if not line1.startswith("1 ") or not line2.startswith("2 "):
+        logger.warning("Skipping malformed TLE record for %r: bad line prefix", display_name)
+        return None
+
+    try:
+        norad_id_1 = int(line1[2:7])
+        norad_id_2 = int(line2[2:7])
+    except ValueError:
+        logger.warning("Skipping malformed TLE record for %r: bad NORAD id", display_name)
+        return None
+
+    if norad_id_1 != norad_id_2:
+        logger.warning(
+            "Skipping malformed TLE record for %r: NORAD id mismatch (%d != %d)",
+            display_name,
+            norad_id_1,
+            norad_id_2,
+        )
+        return None
+
+    try:
+        epoch_utc = _parse_epoch(line1[18:32])
+    except ValueError:
+        logger.warning("Skipping malformed TLE record for %r: bad epoch", display_name)
+        return None
+
+    return TLERecord(
+        name=display_name,
+        norad_id=norad_id_1,
+        line1=line1,
+        line2=line2,
+        epoch_utc=epoch_utc,
+    )
+
+
+def parse_tle_records(text: str) -> list[TLERecord]:
+    """Parse 3-line TLE groups into `TLERecord`s, skipping malformed ones."""
+    records = []
+    for name, line1, line2 in _iter_raw_records(text):
+        record = _parse_record(name, line1, line2)
+        if record is not None:
+            records.append(record)
+    return records
+
 
 def main() -> None:
-    """Entry point for `python -m kessler.ingest`."""
-    raise NotImplementedError
+    """Entry point for `python -m kessler.ingest`: fetch, upsert, print a summary."""
+    logging.basicConfig(level=logging.INFO)
+
+    text = fetch_tle_text()
+    total = len(_iter_raw_records(text))
+    records = parse_tle_records(text)
+
+    conn = get_connection()
+    try:
+        result = upsert_records(conn, records)
+    finally:
+        conn.close()
+
+    skipped = total - result.inserted - result.updated
+    print(
+        f"records fetched: {total} / inserted: {result.inserted} / "
+        f"updated: {result.updated} / skipped: {skipped}"
+    )
 
 
 if __name__ == "__main__":
