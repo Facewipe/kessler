@@ -86,7 +86,7 @@ def test_upsert_same_epoch_counts_as_skipped(conn):
     assert second.updated == 0
     assert second.skipped == 1
 
-    count = conn.execute(
-        "SELECT COUNT(*) FROM satellites WHERE norad_id = ?", (25544,)
-    ).fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM satellites WHERE norad_id = ?", (25544,)).fetchone()[
+        0
+    ]
     assert count == 1

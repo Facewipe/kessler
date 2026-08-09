@@ -88,9 +88,7 @@ def get_satellite(conn: sqlite3.Connection, norad_id: int) -> SatelliteRecord | 
 
 def list_satellites(conn: sqlite3.Connection) -> list[SatelliteRecord]:
     """Fetch all stored satellite TLE records."""
-    rows = conn.execute(
-        "SELECT norad_id, name, line1, line2, epoch_utc FROM satellites"
-    ).fetchall()
+    rows = conn.execute("SELECT norad_id, name, line1, line2, epoch_utc FROM satellites").fetchall()
     return [_record_from_row(row) for row in rows]
 
 
