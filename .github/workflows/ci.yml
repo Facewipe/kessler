@@ -18,4 +18,4 @@ jobs:
       - name: Check formatting with ruff
         run: ruff format --check .
       - name: Run tests
-        run: pytest     этот ?
+        run: pytest
