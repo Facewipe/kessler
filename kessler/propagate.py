@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sgp4.api import Satrec, jday
 
@@ -20,7 +20,7 @@ _WGS84_A_KM = 6378.137
 _WGS84_F = 1 / 298.257223563
 _WGS84_E2 = _WGS84_F * (2 - _WGS84_F)
 
-_J2000_EPOCH = datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_J2000_EPOCH = datetime(2000, 1, 1, 12, 0, 0, tzinfo=UTC)
 _J2000_JD = 2451545.0
 
 _SGP4_ERRORS = {
@@ -65,9 +65,9 @@ def position_at(satrec: Satrec, at: datetime) -> Position:
     (e.g. the orbit has decayed).
     """
     if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
+        at = at.replace(tzinfo=UTC)
     else:
-        at = at.astimezone(timezone.utc)
+        at = at.astimezone(UTC)
 
     jd, fr = jday(at.year, at.month, at.day, at.hour, at.minute, at.second + at.microsecond / 1e6)
     error, teme_km, _teme_velocity = satrec.sgp4(jd, fr)
