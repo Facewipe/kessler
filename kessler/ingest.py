@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from kessler.db import TLERecord, get_connection, upsert_records
+from kessler.db import DEFAULT_DB_PATH, SatelliteRecord, get_connection, upsert_records
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _parse_epoch(epoch_field: str) -> datetime:
     return datetime(year, 1, 1, tzinfo=UTC) + timedelta(days=day_of_year - 1)
 
 
-def _parse_record(name: str, line1: str, line2: str) -> TLERecord | None:
+def _parse_record(name: str, line1: str, line2: str) -> SatelliteRecord | None:
     """Parse a single name/line1/line2 triple, or return `None` if malformed."""
     display_name = name.strip()
 
@@ -68,7 +69,7 @@ def _parse_record(name: str, line1: str, line2: str) -> TLERecord | None:
         logger.warning("Skipping malformed TLE record for %r: bad epoch", display_name)
         return None
 
-    return TLERecord(
+    return SatelliteRecord(
         name=display_name,
         norad_id=norad_id_1,
         line1=line1,
@@ -77,8 +78,8 @@ def _parse_record(name: str, line1: str, line2: str) -> TLERecord | None:
     )
 
 
-def parse_tle_records(text: str) -> list[TLERecord]:
-    """Parse 3-line TLE groups into `TLERecord`s, skipping malformed ones."""
+def parse_tle_records(text: str) -> list[SatelliteRecord]:
+    """Parse 3-line TLE groups into `SatelliteRecord`s, skipping malformed ones."""
     records = []
     for name, line1, line2 in _iter_raw_records(text):
         record = _parse_record(name, line1, line2)
@@ -91,11 +92,12 @@ def main() -> None:
     """Entry point for `python -m kessler.ingest`: fetch, upsert, print a summary."""
     logging.basicConfig(level=logging.INFO)
 
+    db_path = os.environ.get("KESSLER_DB_PATH", DEFAULT_DB_PATH)
     text = fetch_tle_text()
     total = len(_iter_raw_records(text))
     records = parse_tle_records(text)
 
-    conn = get_connection()
+    conn = get_connection(db_path)
     try:
         result = upsert_records(conn, records)
     finally:

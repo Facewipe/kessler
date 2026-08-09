@@ -50,7 +50,7 @@ def test_parse_malformed_fixture_skips_bad_records_and_logs_warning(caplog):
 
 def test_cli_run_twice_does_not_duplicate(tmp_path, monkeypatch):
     db_path = tmp_path / "kessler.db"
-    monkeypatch.setenv("KESSLER_DB", str(db_path))
+    monkeypatch.setenv("KESSLER_DB_PATH", str(db_path))
 
     text = (FIXTURES / "valid_tles.txt").read_text()
     monkeypatch.setattr("kessler.ingest.fetch_tle_text", lambda: text)
@@ -58,9 +58,9 @@ def test_cli_run_twice_does_not_duplicate(tmp_path, monkeypatch):
     main()
     main()
 
-    conn = db.get_connection()
+    conn = db.get_connection(db_path)
     try:
-        count = conn.execute("SELECT COUNT(*) FROM tle").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM satellites").fetchone()[0]
     finally:
         conn.close()
 

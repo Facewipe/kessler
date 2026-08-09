@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from kessler.db import TLERecord, get_connection, upsert_records
+from kessler.db import SatelliteRecord, get_connection, upsert_records
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def conn():
     connection.close()
 
 
-def _record(norad_id: int, epoch: datetime, name: str = "SAT") -> TLERecord:
-    return TLERecord(
+def _record(norad_id: int, epoch: datetime, name: str = "SAT") -> SatelliteRecord:
+    return SatelliteRecord(
         name=name,
         norad_id=norad_id,
         line1=f"1 {norad_id:05d}U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927",
@@ -35,7 +35,9 @@ def test_upsert_new_record_is_inserted(conn):
     assert result.updated == 0
     assert result.skipped == 0
 
-    row = conn.execute("SELECT norad_id, name FROM tle WHERE norad_id = ?", (25544,)).fetchone()
+    row = conn.execute(
+        "SELECT norad_id, name FROM satellites WHERE norad_id = ?", (25544,)
+    ).fetchone()
     assert row == (25544, "SAT")
 
 
@@ -51,7 +53,7 @@ def test_upsert_newer_epoch_replaces_older(conn):
     assert second.inserted == 0
     assert second.skipped == 0
 
-    row = conn.execute("SELECT name FROM tle WHERE norad_id = ?", (25544,)).fetchone()
+    row = conn.execute("SELECT name FROM satellites WHERE norad_id = ?", (25544,)).fetchone()
     assert row == ("SAT NEW",)
 
 
@@ -66,7 +68,7 @@ def test_upsert_older_epoch_does_not_regress(conn):
     assert second.updated == 0
     assert second.skipped == 1
 
-    row = conn.execute("SELECT name FROM tle WHERE norad_id = ?", (25544,)).fetchone()
+    row = conn.execute("SELECT name FROM satellites WHERE norad_id = ?", (25544,)).fetchone()
     assert row == ("SAT NEW",)
 
 
@@ -84,5 +86,7 @@ def test_upsert_same_epoch_counts_as_skipped(conn):
     assert second.updated == 0
     assert second.skipped == 1
 
-    count = conn.execute("SELECT COUNT(*) FROM tle WHERE norad_id = ?", (25544,)).fetchone()[0]
+    count = conn.execute(
+        "SELECT COUNT(*) FROM satellites WHERE norad_id = ?", (25544,)
+    ).fetchone()[0]
     assert count == 1

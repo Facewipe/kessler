@@ -2,35 +2,34 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_DB_PATH = "./kessler.db"
+DEFAULT_DB_PATH = "kessler.db"
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tle (
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS satellites (
     norad_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     line1 TEXT NOT NULL,
     line2 TEXT NOT NULL,
-    epoch_utc TEXT NOT NULL,
-    fetched_at TEXT NOT NULL
+    epoch_utc TEXT,
+    fetched_at TEXT
 );
 """
 
 
 @dataclass(frozen=True)
-class TLERecord:
-    """A single parsed TLE record ready for storage."""
+class SatelliteRecord:
+    """A stored TLE record for one satellite."""
 
-    name: str
     norad_id: int
+    name: str
     line1: str
     line2: str
-    epoch_utc: datetime
+    epoch_utc: datetime | None = None
 
 
 @dataclass
@@ -42,22 +41,72 @@ class UpsertResult:
     skipped: int = 0
 
 
-def get_db_path() -> Path:
-    """Return the configured SQLite DB path (`KESSLER_DB` env var, or the default)."""
-    return Path(os.environ.get("KESSLER_DB", DEFAULT_DB_PATH))
+def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    """Open a SQLite connection to `db_path`, creating the schema if needed.
 
-
-def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Open a SQLite connection, creating the schema if it doesn't exist yet."""
-    path = db_path if db_path is not None else get_db_path()
-    conn = sqlite3.connect(path)
-    conn.execute(SCHEMA)
+    `check_same_thread=False` because callers (the FastAPI dependency and
+    test fixtures via `TestClient`) may hand a single connection across
+    threads. This app never accesses one connection from multiple threads
+    concurrently, only sequentially, so relaxing the check is safe.
+    """
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute(_SCHEMA)
     conn.commit()
     return conn
 
 
-def upsert_records(conn: sqlite3.Connection, records: list[TLERecord]) -> UpsertResult:
-    """Upsert TLE records keyed on `norad_id`.
+def upsert_satellite(conn: sqlite3.Connection, record: SatelliteRecord) -> None:
+    """Insert or unconditionally replace a satellite's TLE record.
+
+    For epoch-aware bulk ingestion that skips stale TLEs, use
+    `upsert_records()` instead.
+    """
+    conn.execute(
+        "INSERT OR REPLACE INTO satellites (norad_id, name, line1, line2, epoch_utc) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            record.norad_id,
+            record.name,
+            record.line1,
+            record.line2,
+            record.epoch_utc.isoformat() if record.epoch_utc is not None else None,
+        ),
+    )
+    conn.commit()
+
+
+def get_satellite(conn: sqlite3.Connection, norad_id: int) -> SatelliteRecord | None:
+    """Fetch a satellite's TLE record by NORAD catalog ID, or None if unknown."""
+    row = conn.execute(
+        "SELECT norad_id, name, line1, line2, epoch_utc FROM satellites WHERE norad_id = ?",
+        (norad_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _record_from_row(row)
+
+
+def list_satellites(conn: sqlite3.Connection) -> list[SatelliteRecord]:
+    """Fetch all stored satellite TLE records."""
+    rows = conn.execute(
+        "SELECT norad_id, name, line1, line2, epoch_utc FROM satellites"
+    ).fetchall()
+    return [_record_from_row(row) for row in rows]
+
+
+def _record_from_row(row: tuple[int, str, str, str, str | None]) -> SatelliteRecord:
+    norad_id, name, line1, line2, epoch_utc = row
+    return SatelliteRecord(
+        norad_id=norad_id,
+        name=name,
+        line1=line1,
+        line2=line2,
+        epoch_utc=datetime.fromisoformat(epoch_utc) if epoch_utc is not None else None,
+    )
+
+
+def upsert_records(conn: sqlite3.Connection, records: list[SatelliteRecord]) -> UpsertResult:
+    """Upsert TLE records keyed on `norad_id`, skipping stale epochs.
 
     A record with a `norad_id` not yet in the database is always inserted.
     A record for a `norad_id` already in the database replaces the stored
@@ -71,12 +120,13 @@ def upsert_records(conn: sqlite3.Connection, records: list[TLERecord]) -> Upsert
 
     for record in records:
         row = conn.execute(
-            "SELECT epoch_utc FROM tle WHERE norad_id = ?", (record.norad_id,)
+            "SELECT epoch_utc FROM satellites WHERE norad_id = ?", (record.norad_id,)
         ).fetchone()
 
-        if row is None:
+        if row is None or row[0] is None:
             conn.execute(
-                "INSERT INTO tle (norad_id, name, line1, line2, epoch_utc, fetched_at) "
+                "INSERT OR REPLACE INTO satellites "
+                "(norad_id, name, line1, line2, epoch_utc, fetched_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     record.norad_id,
@@ -93,8 +143,8 @@ def upsert_records(conn: sqlite3.Connection, records: list[TLERecord]) -> Upsert
         existing_epoch = datetime.fromisoformat(row[0])
         if record.epoch_utc > existing_epoch:
             conn.execute(
-                "UPDATE tle SET name = ?, line1 = ?, line2 = ?, epoch_utc = ?, fetched_at = ? "
-                "WHERE norad_id = ?",
+                "UPDATE satellites SET name = ?, line1 = ?, line2 = ?, epoch_utc = ?, "
+                "fetched_at = ? WHERE norad_id = ?",
                 (
                     record.name,
                     record.line1,
