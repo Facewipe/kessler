@@ -120,7 +120,10 @@ curl "http://localhost:8000/conjunctions/5?hours=72&threshold_km=10"
 and the candidate miss-distance bound; `min_separation_km` (0-50, default 1)
 excludes pairs that never separate by more than this across the whole
 window — e.g. a station's own modules or a docked vehicle, which are
-physically the same cluster rather than a conjunction.
+physically the same cluster rather than a conjunction. This bound widens
+automatically with the epoch-age gap between the pair's TLEs, since an older
+TLE naturally drifts further from a fresher one under propagation even for a
+physically co-located object.
 
 Example response (illustrative, with a fuller catalog):
 
@@ -149,10 +152,11 @@ Example response (illustrative, with a fuller catalog):
 Screening applies a coarse apogee/perigee overlap filter to prune the
 catalog, then propagates surviving pairs on a coarse (60 s) grid and refines
 local minima (1 s steps) to find time of closest approach (TCA) and miss
-distance. Pairs that stay within `min_separation_km` of each other for the
-entire window are excluded as co-located. Results are sorted by miss
-distance, ascending. As with the position endpoint, this reports **geometric
-miss distance only** — never a collision probability.
+distance. Pairs that stay within `min_separation_km` (widened for the pair's
+epoch-age gap) of each other for the entire window are excluded as
+co-located. Results are sorted by miss distance, ascending. As with the
+position endpoint, this reports **geometric miss distance only** — never a
+collision probability.
 
 Returns `404` for an unknown `norad_id` and `422` for `hours`,
 `threshold_km`, or `min_separation_km` outside their allowed ranges.

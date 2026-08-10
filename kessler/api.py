@@ -200,7 +200,11 @@ async def get_conjunctions(
         description=(
             "Pairs whose separation never exceeds this value anywhere in the "
             "window are treated as co-located (e.g. docked spacecraft or a "
-            "station's own modules) and excluded from results."
+            "station's own modules) and excluded from results. This bound is "
+            "widened automatically when the pair's TLEs have different epoch "
+            "ages, since an older TLE naturally drifts further from a "
+            "fresher one under propagation even for a physically co-located "
+            "object."
         ),
     ),
     conn: sqlite3.Connection = Depends(get_db),
