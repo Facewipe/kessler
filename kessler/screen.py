@@ -8,10 +8,14 @@ notes. Screening proceeds in three stages:
    buffer) altitude range does not overlap the target's.
 2. Coarse propagation of remaining pairs over the window at
    `COARSE_STEP_SECONDS` steps, collecting local minima of separation below
-   a candidate bound. Pairs whose separation never exceeds
-   `min_separation_km` anywhere in the window are treated as co-located
-   (e.g. docked spacecraft or a station's own modules) and excluded, since
-   they are physically the same cluster rather than a conjunction.
+   a candidate bound. Pairs whose separation never exceeds a co-location
+   bound anywhere in the window are treated as co-located (e.g. docked
+   spacecraft or a station's own modules) and excluded, since they are
+   physically the same cluster rather than a conjunction. That bound starts
+   at `min_separation_km` and widens with the epoch-age gap between the
+   pair's TLEs (see `colocation_bound_km`), since two independently-fit
+   TLEs of the same physical object diverge under propagation roughly in
+   proportion to how far apart their epochs are.
 3. Refinement around each candidate at `FINE_STEP_SECONDS` steps to find TCA
    and miss distance.
 """
@@ -34,6 +38,14 @@ _EARTH_MU_KM3_S2 = 398600.4418
 COARSE_STEP_SECONDS = 60.0
 FINE_STEP_SECONDS = 1.0
 DEFAULT_MIN_SEPARATION_KM = 1.0
+
+# SGP4/TLE prediction error for LEO grows on the order of 1-3 km/day (see
+# docs/accuracy.md) as independently-fit TLEs of the same physical object
+# diverge under propagation. Widening the co-location bound by this rate per
+# hour of epoch-age gap keeps a docked vehicle on a much older TLE than the
+# target from drifting past a fixed bound and being misreported as a
+# conjunction (see issue #22).
+EPOCH_AGE_DRIFT_KM_PER_HOUR = 0.05
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,17 @@ def ranges_overlap(a: OrbitRange, b: OrbitRange, buffer_km: float) -> bool:
     return (a.perigee_km - buffer_km) <= (b.apogee_km + buffer_km) and (
         b.perigee_km - buffer_km
     ) <= (a.apogee_km + buffer_km)
+
+
+def colocation_bound_km(min_separation_km: float, epoch_age_diff_hours: float) -> float:
+    """Co-location distance bound, widened for the pair's TLE epoch-age gap.
+
+    `min_separation_km` is the bound for two TLEs of the same epoch age;
+    `epoch_age_diff_hours` (sign ignored) widens it at
+    `EPOCH_AGE_DRIFT_KM_PER_HOUR` to absorb the propagation divergence
+    expected between two independently-fit TLEs that far apart in age.
+    """
+    return min_separation_km + EPOCH_AGE_DRIFT_KM_PER_HOUR * abs(epoch_age_diff_hours)
 
 
 def find_close_approaches(
@@ -147,11 +170,15 @@ def screen_catalog(
 
     Applies a coarse apogee/perigee overlap filter (buffered by
     `threshold_km`) to prune the catalog, then searches surviving pairs for
-    close approaches at or below `threshold_km`. Pairs that stay within
-    `min_separation_km` of each other for the entire window (e.g. a station's
+    close approaches at or below `threshold_km`. Pairs that stay within a
+    co-location bound of each other for the entire window (e.g. a station's
     own modules and docked vehicles) are excluded as co-located rather than
-    reported as conjunctions. Epoch ages are measured relative to `start`.
-    Results are sorted by miss distance, ascending.
+    reported as conjunctions. That bound starts at `min_separation_km` and
+    widens with the pair's epoch-age gap (see `colocation_bound_km`), since
+    an older TLE naturally drifts further from a fresher one under
+    propagation even for a physically co-located object. Epoch ages are
+    measured relative to `start`. Results are sorted by miss distance,
+    ascending.
     """
     target_satrec = satrec_from_tle(target.line1, target.line2)
     target_range = orbit_range(target_satrec)
@@ -167,6 +194,8 @@ def screen_catalog(
         if not ranges_overlap(target_range, orbit_range(other_satrec), threshold_km):
             continue
 
+        other_epoch_age_hours = (start - epoch_datetime(other_satrec)).total_seconds() / 3600
+
         try:
             candidates = find_close_approaches(
                 target_satrec,
@@ -174,7 +203,9 @@ def screen_catalog(
                 start,
                 end,
                 threshold_km,
-                min_separation_km=min_separation_km,
+                min_separation_km=colocation_bound_km(
+                    min_separation_km, target_epoch_age_hours - other_epoch_age_hours
+                ),
             )
         except PropagationError:
             continue
@@ -182,7 +213,6 @@ def screen_catalog(
             continue
 
         closest = min(candidates, key=lambda c: c.miss_distance_km)
-        other_epoch_age_hours = (start - epoch_datetime(other_satrec)).total_seconds() / 3600
         results.append(
             ConjunctionResult(
                 other_norad_id=other.norad_id,

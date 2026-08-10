@@ -9,7 +9,9 @@ import pytest
 from kessler.db import SatelliteRecord
 from kessler.propagate import epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import (
+    EPOCH_AGE_DRIFT_KM_PER_HOUR,
     OrbitRange,
+    colocation_bound_km,
     find_close_approaches,
     orbit_range,
     ranges_overlap,
@@ -51,6 +53,21 @@ FAR_TLE_LINE2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 01.00273790
 # module, which shares the station's orbit and therefore stays at ~0 km
 # separation for the whole window -- not a conjunction.
 DOCKED_NORAD_ID = 100007
+
+# Same orbit as the reference TLE (same epoch, same mean anomaly), but with
+# mean motion increased by 0.0015 rev/day. This models a docked vehicle
+# whose independently-fit TLE has a slightly different mean motion from the
+# station's -- the mechanism reported in issue #22, where a 44h-old vs. 7h-
+# old TLE pair for physically docked spacecraft drifted apart under
+# propagation enough to clear the 1 km co-location bound and get reported as
+# a spurious conjunction. By vis-viva, this mean-motion delta corresponds to
+# under 1 m/s of along-track drift (three orders of magnitude below LEO
+# orbital speed, consistent with two objects that are not actually
+# separating) yet accumulates past a 1 km position bound within roughly the
+# first half hour of propagation.
+DOCKED_DRIFT_NORAD_ID = 100008
+DOCKED_DRIFT_TLE_LINE1 = TEST_TLE_LINE1
+DOCKED_DRIFT_TLE_LINE2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82569157413663"
 
 _EPOCH = epoch_datetime(satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2))
 
@@ -171,6 +188,53 @@ def test_find_close_approaches_min_separation_km_is_configurable() -> None:
     assert included != []
 
 
+def test_find_close_approaches_epoch_drift_exceeds_fixed_bound() -> None:
+    """Reproduces the reported bug (issue #22): a docked object whose
+    independently-fit TLE has a slightly different mean motion (as real
+    epoch-mismatched TLEs do -- see DOCKED_DRIFT_TLE_LINE2 above) drifts
+    past a fixed 1 km co-location bound well within the screening window,
+    even though it never actually separates from the target. A long window
+    is used so the drift clears 1 km with a wide margin regardless of the
+    exact drift rate."""
+    target = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    drifting = satrec_from_tle(DOCKED_DRIFT_TLE_LINE1, DOCKED_DRIFT_TLE_LINE2)
+    start, end = _EPOCH, _EPOCH + timedelta(hours=24)
+
+    candidates = find_close_approaches(
+        target, drifting, start, end, candidate_bound_km=200.0, min_separation_km=1.0
+    )
+
+    assert candidates != []
+
+
+def test_find_close_approaches_wider_bound_excludes_epoch_drifted_pair() -> None:
+    """A bound wide enough to cover the propagation drift -- what
+    `colocation_bound_km` provides once it accounts for a real epoch-age gap
+    -- correctly treats the same pair as co-located instead of a
+    conjunction. A short window is used so the drift stays a small fraction
+    of the bound regardless of the exact drift rate."""
+    target = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    drifting = satrec_from_tle(DOCKED_DRIFT_TLE_LINE1, DOCKED_DRIFT_TLE_LINE2)
+    start, end = _EPOCH, _EPOCH + timedelta(minutes=10)
+
+    candidates = find_close_approaches(
+        target, drifting, start, end, candidate_bound_km=100.0, min_separation_km=50.0
+    )
+
+    assert candidates == []
+
+
+def test_colocation_bound_km_widens_with_epoch_age_gap() -> None:
+    assert colocation_bound_km(1.0, 0.0) == pytest.approx(1.0)
+    assert colocation_bound_km(1.0, 37.0) == pytest.approx(
+        1.0 + EPOCH_AGE_DRIFT_KM_PER_HOUR * 37.0
+    )
+
+
+def test_colocation_bound_km_ignores_sign_of_epoch_age_gap() -> None:
+    assert colocation_bound_km(1.0, -37.0) == colocation_bound_km(1.0, 37.0)
+
+
 def test_screen_catalog_excludes_colocated_pair() -> None:
     target = SatelliteRecord(
         norad_id=TEST_NORAD_ID, name="TARGET", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
@@ -184,6 +248,30 @@ def test_screen_catalog_excludes_colocated_pair() -> None:
     start, end = _WINDOW_START, _WINDOW_END
 
     results = screen_catalog(target, [docked], start, end, threshold_km=100.0)
+
+    assert results == []
+
+
+def test_screen_catalog_excludes_drifted_docked_pair_given_enough_margin() -> None:
+    """End-to-end: `screen_catalog` wires `min_separation_km` through to
+    `find_close_approaches` and treats a still-drifting-but-physically-docked
+    pair (see DOCKED_DRIFT_TLE_LINE2 above) as co-located once the bound
+    covers the drift -- what `colocation_bound_km` provides automatically
+    for a pair with a real epoch-age gap."""
+    target = SatelliteRecord(
+        norad_id=TEST_NORAD_ID, name="TARGET", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
+    )
+    drifting = SatelliteRecord(
+        norad_id=DOCKED_DRIFT_NORAD_ID,
+        name="DOCKED-DRIFT",
+        line1=DOCKED_DRIFT_TLE_LINE1,
+        line2=DOCKED_DRIFT_TLE_LINE2,
+    )
+    start, end = _EPOCH, _EPOCH + timedelta(minutes=10)
+
+    results = screen_catalog(
+        target, [drifting], start, end, threshold_km=100.0, min_separation_km=50.0
+    )
 
     assert results == []
 
