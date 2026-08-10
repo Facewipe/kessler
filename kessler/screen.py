@@ -22,6 +22,7 @@ notes. Screening proceeds in three stages:
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from sgp4.api import Satrec
 
 from kessler.db import SatelliteRecord
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
+
+logger = logging.getLogger(__name__)
 
 _EARTH_RADIUS_KM = 6378.137
 _EARTH_MU_KM3_S2 = 398600.4418
@@ -44,8 +47,11 @@ DEFAULT_MIN_SEPARATION_KM = 1.0
 # diverge under propagation. Widening the co-location bound by this rate per
 # hour of epoch-age gap keeps a docked vehicle on a much older TLE than the
 # target from drifting past a fixed bound and being misreported as a
-# conjunction (see issue #22).
-EPOCH_AGE_DRIFT_KM_PER_HOUR = 0.05
+# conjunction (see issue #22). 0.15 km/h (3.6 km/day) sits at the upper end
+# of that 1-3 km/day range rather than the optimistic end, since real pairs
+# (e.g. CYGNUS NG-24 / PROGRESS-MS 34) were still clearing a 0.05 km/h bound
+# and being misreported as conjunctions (see issue #24).
+EPOCH_AGE_DRIFT_KM_PER_HOUR = 0.15
 
 
 @dataclass(frozen=True)
@@ -136,8 +142,18 @@ def find_close_approaches(
         return []
 
     distances = [_distance_km(target, other, t) for t in coarse_times]
+    max_distance_km = max(distances)
 
-    if max(distances) <= min_separation_km:
+    logger.debug(
+        "co-location check %s vs %s: max separation %.3f km, bound %.3f km (%s)",
+        target.satnum,
+        other.satnum,
+        max_distance_km,
+        min_separation_km,
+        "excluded" if max_distance_km <= min_separation_km else "not excluded",
+    )
+
+    if max_distance_km <= min_separation_km:
         return []
 
     candidates: list[ConjunctionCandidate] = []
