@@ -117,7 +117,10 @@ curl "http://localhost:8000/conjunctions/5?hours=72&threshold_km=10"
 
 `hours` (1-168, default 72) sets the screening window length from now;
 `threshold_km` (1-50, default 10) sets both the coarse orbit-overlap buffer
-and the candidate miss-distance bound.
+and the candidate miss-distance bound; `min_separation_km` (0-50, default 1)
+excludes pairs that never separate by more than this across the whole
+window — e.g. a station's own modules or a docked vehicle, which are
+physically the same cluster rather than a conjunction.
 
 Example response (illustrative, with a fuller catalog):
 
@@ -129,6 +132,7 @@ Example response (illustrative, with a fuller catalog):
   "window_start_utc": "2026-08-09T12:00:00+00:00",
   "window_end_utc": "2026-08-12T12:00:00+00:00",
   "threshold_km": 10.0,
+  "min_separation_km": 1.0,
   "conjunctions": [
     {
       "other_norad_id": 43205,
@@ -145,12 +149,13 @@ Example response (illustrative, with a fuller catalog):
 Screening applies a coarse apogee/perigee overlap filter to prune the
 catalog, then propagates surviving pairs on a coarse (60 s) grid and refines
 local minima (1 s steps) to find time of closest approach (TCA) and miss
-distance. Results are sorted by miss distance, ascending. As with the
-position endpoint, this reports **geometric miss distance only** — never a
-collision probability.
+distance. Pairs that stay within `min_separation_km` of each other for the
+entire window are excluded as co-located. Results are sorted by miss
+distance, ascending. As with the position endpoint, this reports **geometric
+miss distance only** — never a collision probability.
 
-Returns `404` for an unknown `norad_id` and `422` for `hours` or
-`threshold_km` outside their allowed ranges.
+Returns `404` for an unknown `norad_id` and `422` for `hours`,
+`threshold_km`, or `min_separation_km` outside their allowed ranges.
 
 ## Authentication
 

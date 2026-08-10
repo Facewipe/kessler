@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
-from kessler.screen import screen_catalog
+from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
 app = FastAPI(
     title="kessler",
@@ -165,6 +165,7 @@ async def get_position(
                         "window_start_utc": "2026-08-09T12:00:00+00:00",
                         "window_end_utc": "2026-08-12T12:00:00+00:00",
                         "threshold_km": 10.0,
+                        "min_separation_km": 1.0,
                         "conjunctions": [
                             {
                                 "other_norad_id": 43205,
@@ -192,6 +193,16 @@ async def get_conjunctions(
         le=50,
         description="Coarse-filter buffer and candidate miss-distance bound, in km.",
     ),
+    min_separation_km: float = Query(
+        default=DEFAULT_MIN_SEPARATION_KM,
+        ge=0,
+        le=50,
+        description=(
+            "Pairs whose separation never exceeds this value anywhere in the "
+            "window are treated as co-located (e.g. docked spacecraft or a "
+            "station's own modules) and excluded from results."
+        ),
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, object]:
     """Screen a target satellite against the catalog for conjunctions.
@@ -207,7 +218,9 @@ async def get_conjunctions(
     window_end = window_start + timedelta(hours=hours)
 
     catalog = list_satellites(conn)
-    results = screen_catalog(target, catalog, window_start, window_end, threshold_km)
+    results = screen_catalog(
+        target, catalog, window_start, window_end, threshold_km, min_separation_km
+    )
 
     return {
         "disclaimer": CONJUNCTION_DISCLAIMER,
@@ -216,6 +229,7 @@ async def get_conjunctions(
         "window_start_utc": window_start.isoformat(),
         "window_end_utc": window_end.isoformat(),
         "threshold_km": threshold_km,
+        "min_separation_km": min_separation_km,
         "conjunctions": [
             {
                 "other_norad_id": r.other_norad_id,
