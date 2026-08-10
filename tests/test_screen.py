@@ -47,6 +47,11 @@ FAR_NORAD_ID = 200005
 FAR_TLE_LINE1 = TEST_TLE_LINE1
 FAR_TLE_LINE2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 01.00273790413668"
 
+# Same exact TLE as the target: models a docked vehicle or a station's own
+# module, which shares the station's orbit and therefore stays at ~0 km
+# separation for the whole window -- not a conjunction.
+DOCKED_NORAD_ID = 100007
+
 _EPOCH = epoch_datetime(satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2))
 
 # A 30-minute window straddling the post-epoch apogee crossing, so the
@@ -116,6 +121,71 @@ def test_find_close_approaches_matches_brute_force_reference() -> None:
     best = min(candidates, key=lambda c: c.miss_distance_km)
     assert abs((best.tca - expected_time).total_seconds()) <= 60
     assert best.miss_distance_km == pytest.approx(expected_distance, abs=0.5)
+
+
+def test_find_close_approaches_tca_strictly_inside_window() -> None:
+    """A genuine interior close approach must not degenerate to the window edge.
+
+    Regression test: refinement previously returned the first grid point
+    (the window start) instead of the true local minimum in some cases.
+    """
+    target = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    other = satrec_from_tle(CLOSE_TLE_LINE1, CLOSE_TLE_LINE2)
+    start, end = _WINDOW_START, _WINDOW_END
+
+    candidates = find_close_approaches(target, other, start, end, candidate_bound_km=100.0)
+
+    assert candidates
+    best = min(candidates, key=lambda c: c.miss_distance_km)
+    assert start < best.tca < end
+
+
+def test_find_close_approaches_excludes_colocated_objects() -> None:
+    """Objects sharing an orbit (docked spacecraft, a station's own modules)
+    stay at ~0 km separation for the whole window and are not a conjunction."""
+    target = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    docked = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    start, end = _WINDOW_START, _WINDOW_END
+
+    candidates = find_close_approaches(
+        target, docked, start, end, candidate_bound_km=100.0, min_separation_km=1.0
+    )
+
+    assert candidates == []
+
+
+def test_find_close_approaches_min_separation_km_is_configurable() -> None:
+    """The co-location threshold is a real parameter, not a hardcoded value."""
+    target = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    docked = satrec_from_tle(TEST_TLE_LINE1, TEST_TLE_LINE2)
+    start, end = _WINDOW_START, _WINDOW_END
+
+    excluded = find_close_approaches(
+        target, docked, start, end, candidate_bound_km=100.0, min_separation_km=1.0
+    )
+    included = find_close_approaches(
+        target, docked, start, end, candidate_bound_km=100.0, min_separation_km=-1.0
+    )
+
+    assert excluded == []
+    assert included != []
+
+
+def test_screen_catalog_excludes_colocated_pair() -> None:
+    target = SatelliteRecord(
+        norad_id=TEST_NORAD_ID, name="TARGET", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
+    )
+    docked = SatelliteRecord(
+        norad_id=DOCKED_NORAD_ID,
+        name="DOCKED-MODULE",
+        line1=TEST_TLE_LINE1,
+        line2=TEST_TLE_LINE2,
+    )
+    start, end = _WINDOW_START, _WINDOW_END
+
+    results = screen_catalog(target, [docked], start, end, threshold_km=100.0)
+
+    assert results == []
 
 
 def test_screen_catalog_prunes_non_overlapping_orbit() -> None:

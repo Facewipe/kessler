@@ -8,7 +8,10 @@ notes. Screening proceeds in three stages:
    buffer) altitude range does not overlap the target's.
 2. Coarse propagation of remaining pairs over the window at
    `COARSE_STEP_SECONDS` steps, collecting local minima of separation below
-   a candidate bound.
+   a candidate bound. Pairs whose separation never exceeds
+   `min_separation_km` anywhere in the window are treated as co-located
+   (e.g. docked spacecraft or a station's own modules) and excluded, since
+   they are physically the same cluster rather than a conjunction.
 3. Refinement around each candidate at `FINE_STEP_SECONDS` steps to find TCA
    and miss distance.
 """
@@ -30,6 +33,7 @@ _EARTH_MU_KM3_S2 = 398600.4418
 
 COARSE_STEP_SECONDS = 60.0
 FINE_STEP_SECONDS = 1.0
+DEFAULT_MIN_SEPARATION_KM = 1.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,7 @@ def find_close_approaches(
     candidate_bound_km: float,
     coarse_step_seconds: float = COARSE_STEP_SECONDS,
     fine_step_seconds: float = FINE_STEP_SECONDS,
+    min_separation_km: float = DEFAULT_MIN_SEPARATION_KM,
 ) -> list[ConjunctionCandidate]:
     """Find local-minimum close approaches between two satellites over [start, end].
 
@@ -97,12 +102,20 @@ def find_close_approaches(
     of separation distance at or below `candidate_bound_km`, then refines each
     with a fine linear search (step `fine_step_seconds`) over the surrounding
     coarse interval to locate TCA and miss distance.
+
+    If separation never exceeds `min_separation_km` anywhere in the window,
+    the pair is treated as co-located (formation flying or docked, e.g. an
+    ISS module and a docked vehicle) rather than a conjunction, and no
+    candidates are returned.
     """
     coarse_times = _time_grid(start, end, coarse_step_seconds)
     if len(coarse_times) < 2:
         return []
 
     distances = [_distance_km(target, other, t) for t in coarse_times]
+
+    if max(distances) <= min_separation_km:
+        return []
 
     candidates: list[ConjunctionCandidate] = []
     last_index = len(distances) - 1
@@ -128,13 +141,17 @@ def screen_catalog(
     start: datetime,
     end: datetime,
     threshold_km: float,
+    min_separation_km: float = DEFAULT_MIN_SEPARATION_KM,
 ) -> list[ConjunctionResult]:
     """Screen `target` against `catalog` for conjunctions over [start, end].
 
     Applies a coarse apogee/perigee overlap filter (buffered by
     `threshold_km`) to prune the catalog, then searches surviving pairs for
-    close approaches at or below `threshold_km`. Epoch ages are measured
-    relative to `start`. Results are sorted by miss distance, ascending.
+    close approaches at or below `threshold_km`. Pairs that stay within
+    `min_separation_km` of each other for the entire window (e.g. a station's
+    own modules and docked vehicles) are excluded as co-located rather than
+    reported as conjunctions. Epoch ages are measured relative to `start`.
+    Results are sorted by miss distance, ascending.
     """
     target_satrec = satrec_from_tle(target.line1, target.line2)
     target_range = orbit_range(target_satrec)
@@ -152,7 +169,12 @@ def screen_catalog(
 
         try:
             candidates = find_close_approaches(
-                target_satrec, other_satrec, start, end, threshold_km
+                target_satrec,
+                other_satrec,
+                start,
+                end,
+                threshold_km,
+                min_separation_km=min_separation_km,
             )
         except PropagationError:
             continue
