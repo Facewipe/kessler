@@ -101,7 +101,7 @@ async def get_demo() -> HTMLResponse:
     `/satellites/{norad_id}/position` and `/conjunctions/{norad_id}`
     endpoints from the browser.
     """
-    return HTMLResponse(DEMO_HTML_PATH.read_text())
+    return HTMLResponse(DEMO_HTML_PATH.read_text(encoding="utf-8"))
 
 
 @app.get(
