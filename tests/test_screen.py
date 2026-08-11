@@ -226,9 +226,7 @@ def test_find_close_approaches_wider_bound_excludes_epoch_drifted_pair() -> None
 
 def test_colocation_bound_km_widens_with_epoch_age_gap() -> None:
     assert colocation_bound_km(1.0, 0.0) == pytest.approx(1.0)
-    assert colocation_bound_km(1.0, 37.0) == pytest.approx(
-        1.0 + EPOCH_AGE_DRIFT_KM_PER_HOUR * 37.0
-    )
+    assert colocation_bound_km(1.0, 37.0) == pytest.approx(1.0 + EPOCH_AGE_DRIFT_KM_PER_HOUR * 37.0)
 
 
 def test_colocation_bound_km_ignores_sign_of_epoch_age_gap() -> None:

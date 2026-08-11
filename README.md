@@ -199,5 +199,7 @@ position = response.json()
 if position["stale"]:
     print(f"Warning: TLE is {position['epoch_age_hours']:.1f}h old, accuracy may be degraded")
 
-print(f"{position['name']}: lat={position['lat']}, lon={position['lon']}, alt_km={position['alt_km']}")
+print(
+    f"{position['name']}: lat={position['lat']}, lon={position['lon']}, alt_km={position['alt_km']}"
+)
 ```
