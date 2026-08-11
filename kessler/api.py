@@ -9,13 +9,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
 DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
+WORLD_JSON_PATH = Path(__file__).parent / "static" / "world.json"
 
 app = FastAPI(
     title="kessler",
@@ -102,6 +103,22 @@ async def get_demo() -> HTMLResponse:
     endpoints from the browser.
     """
     return HTMLResponse(DEMO_HTML_PATH.read_text(encoding="utf-8"))
+
+
+@app.get(
+    "/world.json",
+    tags=["demo"],
+    summary="Simplified world land polygons for the demo map",
+    responses={200: {"content": {"application/json": {}}}},
+)
+async def get_world_map() -> FileResponse:
+    """Serve the pre-built land polygon data used by `/demo`'s map.
+
+    Built ahead of time by `scripts/build_map.py` and committed to the
+    repo, so the demo page renders offline with no runtime download from
+    a third party.
+    """
+    return FileResponse(WORLD_JSON_PATH, media_type="application/json")
 
 
 @app.get(
