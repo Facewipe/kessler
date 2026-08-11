@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler — live demo</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #10151f;
+    --grid: #1c2433;
+    --border: #232b3a;
+    --text: #c9d4e3;
+    --muted: #6b7688;
+    --accent: #5eead4;
+    --stale: #f2a94e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  header {
+    padding: 20px 24px 8px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  header h1 span { color: var(--accent); }
+  header p.sub {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  main {
+    display: flex;
+    gap: 16px;
+    padding: 12px 24px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  #map-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 920px;
+    flex: 1 1 640px;
+    aspect-ratio: 2 / 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  #map-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+  .grid-line.zero { stroke: #2c3648; }
+  .marker {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    margin-left: -4.5px;
+    margin-top: -4.5px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(94, 234, 212, 0.7);
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+  .marker:hover { transform: scale(1.6); }
+  .marker.stale { background: var(--stale); box-shadow: 0 0 6px rgba(242, 169, 78, 0.7); }
+  .marker.selected { outline: 2px solid var(--text); outline-offset: 2px; }
+  .marker-label {
+    position: absolute;
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translate(8px, -6px);
+  }
+  #panel {
+    flex: 0 0 300px;
+    min-width: 260px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+    font-size: 13px;
+    min-height: 200px;
+  }
+  #panel.empty { color: var(--muted); }
+  #panel h2 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: var(--accent);
+  }
+  #panel .norad {
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  #panel dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 10px;
+    margin: 0 0 16px;
+  }
+  #panel dt { color: var(--muted); }
+  #panel dd { margin: 0; text-align: right; }
+  #panel .flag-stale { color: var(--stale); }
+  #panel .flag-ok { color: var(--accent); }
+  #panel h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  #panel .disclaimer {
+    font-size: 11px;
+    color: var(--muted);
+    border-left: 2px solid var(--border);
+    padding-left: 8px;
+    margin-bottom: 10px;
+  }
+  #panel ul { list-style: none; margin: 0; padding: 0; }
+  #panel li {
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+  }
+  #panel li .row1 { display: flex; justify-content: space-between; }
+  #panel li .miss { color: var(--accent); }
+  #panel .close-btn {
+    float: right;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  footer {
+    padding: 8px 24px 24px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  footer a { color: var(--accent); }
+  #status {
+    padding: 0 24px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>kessler<span>::</span>demo</h1>
+  <p class="sub">Live positions for a curated set of well-known satellites, updated every 30s.</p>
+</header>
+
+<div id="status">loading positions&hellip;</div>
+
+<main>
+  <div id="map-wrap">
+    <svg viewBox="0 0 360 180" preserveAspectRatio="none" aria-hidden="true">
+      <!-- graticule: a line every 30 degrees, equator/prime meridian emphasized -->
+      <line class="grid-line zero" x1="180" y1="0" x2="180" y2="180"></line>
+      <line class="grid-line zero" x1="0" y1="90" x2="360" y2="90"></line>
+    </svg>
+    <div id="markers"></div>
+  </div>
+
+  <div id="panel" class="empty">
+    <p>Click a satellite marker to see its details and current conjunctions.</p>
+  </div>
+</main>
+
+<footer>
+  This is a demo of the kessler conjunction screening API, not a product UI.
+  Full reference at <a href="/docs">/docs</a>.
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // A small curated set of well-known active satellites (ISS + ~20 others).
+  // Any of these missing from the locally ingested catalog is skipped
+  // silently (the position endpoint 404s for unknown NORAD ids).
+  var SATELLITE_IDS = [
+    25544, // ISS (ZARYA)
+    20580, // Hubble Space Telescope
+    25994, // Terra
+    27424, // Aqua
+    39084, // Landsat 8
+    49260, // Landsat 9
+    25338, // NOAA 15
+    28654, // NOAA 18
+    33591, // NOAA 19
+    43013, // NOAA 20
+    41866, // GOES 16
+    43226, // GOES 17
+    29155, // GOES 13
+    39634, // Sentinel-1A
+    40697, // Sentinel-2A
+    41335, // Sentinel-3A
+    44420, // CSS (Tianhe)
+    27607, // INTEGRAL
+    25989, // XMM-Newton
+    43205, // Starlink-1007
+    27386  // Envisat
+  ];
+
+  var REFRESH_MS = 30000;
+  var markersEl = document.getElementById("markers");
+  var panelEl = document.getElementById("panel");
+  var statusEl = document.getElementById("status");
+  var markerNodes = {};
+  var latestPositions = {};
+  var selectedId = null;
+
+  function toXY(lat, lon) {
+    return {
+      left: ((lon + 180) / 360) * 100 + "%",
+      top: ((90 - lat) / 180) * 100 + "%"
+    };
+  }
+
+  function ensureMarker(id) {
+    if (markerNodes[id]) return markerNodes[id];
+    var el = document.createElement("div");
+    el.className = "marker";
+    el.title = "NORAD " + id;
+    el.addEventListener("click", function () { selectSatellite(id); });
+    markersEl.appendChild(el);
+    markerNodes[id] = el;
+    return el;
+  }
+
+  function removeMarker(id) {
+    if (!markerNodes[id]) return;
+    markersEl.removeChild(markerNodes[id]);
+    delete markerNodes[id];
+  }
+
+  function renderEmptyPanel() {
+    panelEl.className = "empty";
+    panelEl.innerHTML = "<p>Click a satellite marker to see its details and current conjunctions.</p>";
+  }
+
+  function renderPanelLoading(position) {
+    panelEl.className = "";
+    panelEl.innerHTML =
+      "<button class=\"close-btn\" id=\"panel-close\">close</button>" +
+      "<h2>" + escapeHtml(position.name) + "</h2>" +
+      "<div class=\"norad\">NORAD " + position.norad_id + "</div>" +
+      renderFactsDl(position) +
+      "<h3>Conjunctions</h3>" +
+      "<div class=\"disclaimer\">loading&hellip;</div>";
+    document.getElementById("panel-close").addEventListener("click", deselectSatellite);
+  }
+
+  function renderFactsDl(position) {
+    var staleFlag = position.stale
+      ? "<span class=\"flag-stale\">stale</span>"
+      : "<span class=\"flag-ok\">fresh</span>";
+    return (
+      "<dl>" +
+      "<dt>lat</dt><dd>" + position.lat.toFixed(3) + "</dd>" +
+      "<dt>lon</dt><dd>" + position.lon.toFixed(3) + "</dd>" +
+      "<dt>alt_km</dt><dd>" + position.alt_km.toFixed(1) + "</dd>" +
+      "<dt>epoch_age_hours</dt><dd>" + position.epoch_age_hours.toFixed(1) + "</dd>" +
+      "<dt>tle</dt><dd>" + staleFlag + "</dd>" +
+      "</dl>"
+    );
+  }
+
+  function renderPanel(position, conjunctions) {
+    if (selectedId !== position.norad_id) return; // user moved on before this resolved
+
+    var listHtml;
+    if (conjunctions === null) {
+      listHtml = "<div class=\"disclaimer\">failed to load conjunctions</div>";
+    } else if (conjunctions.conjunctions.length === 0) {
+      listHtml =
+        "<div class=\"disclaimer\">" + escapeHtml(conjunctions.disclaimer) + "</div>" +
+        "<p style=\"color: var(--muted)\">No conjunctions found in the screening window.</p>";
+    } else {
+      listHtml =
+        "<div class=\"disclaimer\">" + escapeHtml(conjunctions.disclaimer) + "</div>" +
+        "<ul>" +
+        conjunctions.conjunctions.map(function (c) {
+          return (
+            "<li>" +
+            "<div class=\"row1\"><span>" + escapeHtml(c.other_name) + "</span>" +
+            "<span class=\"miss\">" + c.miss_distance_km.toFixed(3) + " km</span></div>" +
+            "<div style=\"color: var(--muted); font-size: 11px;\">NORAD " + c.other_norad_id +
+            " &middot; TCA " + c.tca_utc + "</div>" +
+            "</li>"
+          );
+        }).join("") +
+        "</ul>";
+    }
+
+    panelEl.className = "";
+    panelEl.innerHTML =
+      "<button class=\"close-btn\" id=\"panel-close\">close</button>" +
+      "<h2>" + escapeHtml(position.name) + "</h2>" +
+      "<div class=\"norad\">NORAD " + position.norad_id + "</div>" +
+      renderFactsDl(position) +
+      "<h3>Conjunctions</h3>" +
+      listHtml;
+    document.getElementById("panel-close").addEventListener("click", deselectSatellite);
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function selectSatellite(id) {
+    selectedId = id;
+    Object.keys(markerNodes).forEach(function (key) {
+      markerNodes[key].classList.toggle("selected", Number(key) === id);
+    });
+
+    var position = latestPositions[id];
+    if (!position) return;
+    renderPanelLoading(position);
+
+    fetch("/conjunctions/" + id)
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .then(function (data) { renderPanel(position, data); })
+      .catch(function () { renderPanel(position, null); });
+  }
+
+  function deselectSatellite() {
+    selectedId = null;
+    Object.keys(markerNodes).forEach(function (key) {
+      markerNodes[key].classList.remove("selected");
+    });
+    renderEmptyPanel();
+  }
+
+  function refreshOne(id) {
+    return fetch("/satellites/" + id + "/position")
+      .then(function (resp) {
+        if (!resp.ok) {
+          removeMarker(id);
+          delete latestPositions[id];
+          return;
+        }
+        return resp.json().then(function (position) {
+          latestPositions[id] = position;
+          var el = ensureMarker(id);
+          var xy = toXY(position.lat, position.lon);
+          el.style.left = xy.left;
+          el.style.top = xy.top;
+          el.classList.toggle("stale", !!position.stale);
+          el.classList.toggle("selected", selectedId === id);
+          el.title = position.name + " (NORAD " + position.norad_id + ")";
+
+          if (selectedId === id) {
+            var facts = panelEl.querySelector("dl");
+            if (facts) facts.outerHTML = renderFactsDl(position);
+          }
+        });
+      })
+      .catch(function () {
+        removeMarker(id);
+        delete latestPositions[id];
+      });
+  }
+
+  function refreshAll() {
+    statusEl.textContent = "refreshing…";
+    Promise.all(SATELLITE_IDS.map(refreshOne)).then(function () {
+      var count = Object.keys(latestPositions).length;
+      statusEl.textContent =
+        count + " / " + SATELLITE_IDS.length + " satellites plotted · last updated " +
+        new Date().toLocaleTimeString();
+    });
+  }
+
+  refreshAll();
+  setInterval(refreshAll, REFRESH_MS);
+})();
+</script>
+</body>
+</html>
