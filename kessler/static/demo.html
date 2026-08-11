@@ -1,1 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler &mdash; live demo</title>
+<style>
+  :root {
+    --ocean: #101b2e;
+    --land: #1c2b42;
+    --coast: #35507a;
+    --marker: #7ee3ff;
+    --marker-stale: #ffb454;
+    --text: #cfe0f5;
+    --text-dim: #7d93b8;
+    --panel-bg: #0c1524;
+    --panel-border: #24344f;
+  }
 
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--ocean);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(to bottom, rgba(16, 27, 46, 0.95), rgba(16, 27, 46, 0));
+    pointer-events: none;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  header p {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  #map-container {
+    position: absolute;
+    inset: 0;
+  }
+
+  svg#map {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: var(--ocean);
+  }
+
+  .landmass {
+    fill: var(--land);
+    stroke: var(--coast);
+    stroke-width: 0.35;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .satellite {
+    fill: var(--marker);
+    stroke: #0a1220;
+    stroke-width: 0.25;
+    cursor: pointer;
+  }
+
+  .satellite.stale {
+    fill: var(--marker-stale);
+  }
+
+  .satellite:hover {
+    stroke: #ffffff;
+    stroke-width: 0.5;
+  }
+
+  #status {
+    position: fixed;
+    bottom: 0.75rem;
+    left: 1rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    z-index: 10;
+  }
+
+  #panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    max-width: 85vw;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--panel-border);
+    transform: translateX(100%);
+    transition: transform 0.2s ease-out;
+    z-index: 20;
+    overflow-y: auto;
+    padding: 1rem;
+  }
+
+  #panel.open {
+    transform: translateX(0);
+  }
+
+  #panel h2 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.05rem;
+  }
+
+  #panel .norad-id {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-bottom: 1rem;
+  }
+
+  #panel-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  #panel-close:hover {
+    color: var(--text);
+  }
+
+  .field-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 0.85rem;
+  }
+
+  .field-row .label {
+    color: var(--text-dim);
+  }
+
+  .badge-stale {
+    display: inline-block;
+    margin-top: 0.5rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    background: rgba(255, 180, 84, 0.15);
+    color: var(--marker-stale);
+    font-size: 0.75rem;
+  }
+
+  #conjunctions-section h3 {
+    font-size: 0.9rem;
+    margin: 1.25rem 0 0.5rem 0;
+  }
+
+  .conjunction-item {
+    padding: 0.5rem;
+    margin-bottom: 0.4rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  .conjunction-item .name {
+    font-weight: 600;
+  }
+
+  .conjunction-item .miss {
+    color: var(--marker);
+  }
+
+  #disclaimer {
+    margin-top: 1.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--panel-border);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  .loading, .empty {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>kessler</h1>
+    <p>live demo &mdash; positions refresh every 30s</p>
+  </header>
+
+  <div id="map-container">
+    <svg id="map" viewBox="0 0 360 180" preserveAspectRatio="xMidYMid meet">
+      <rect x="0" y="0" width="360" height="180" fill="#101b2e"></rect>
+
+      <path class="landmass" d="M340 155 L280 158 L220 155 L180 160 L120 158 L60 160 L0 155 L0 180 L360 180 L360 155 Z"></path>
+
+      <path class="landmass" d="M163 75 L164 69 L174 55 L183 53 L190 53 L191 58 L200 58 L212 59 L215 62 L223 78 L231 78 L223 85 L220 91 L220 95 L215 110 L205 124 L198 124 L192 108 L189 90 L189 86 L181 85 L172 85 L167 81 Z"></path>
+
+      <path class="landmass" d="M229 102 L230 106 L228 112 L224 115 L223 109 L224 105 L227 102 Z"></path>
+
+      <path class="landmass" d="M171 47 L171 54 L183 48 L190 46 L199 48 L207 50 L215 53 L212 59 L223 78 L237 65 L250 66 L257 81 L268 68 L275 74 L280 83 L289 79 L302 59 L310 48 L315 38 L340 30 L359 24 L350 21 L320 17 L280 15 L240 20 L220 25 L205 20 L185 28 L190 36 L180 39 L178 47 Z"></path>
+
+      <path class="landmass" d="M175 32 L179 33 L178 35 L180 37 L181 39 L179 39 L176 40 L175 39 L176 37 L177 36 L175 35 L174 32 Z"></path>
+
+      <path class="landmass" d="M310 59 L311 58 L310 56 L313 56 L316 55 L319 55 L320 53 L321 51 L320 49 L321 47 L325 47 L322 45 L318 52 L313 54 Z"></path>
+
+      <path class="landmass" d="M15 24 L40 20 L85 17 L105 22 L110 27 L120 40 L128 43 L114 46 L110 49 L105 55 L100 64 L92 60 L83 64 L83 69 L88 75 L97 81 L75 69 L63 57 L56 50 L56 41 L47 35 L39 30 L22 35 L15 30 Z"></path>
+
+      <path class="landmass" d="M134 7 L150 8 L160 14 L155 20 L138 30 L127 26 L124 23 L122 18 L120 11 L128 9 Z"></path>
+
+      <path class="landmass" d="M103 82 L108 79 L120 82 L129 89 L132 95 L145 98 L140 110 L132 115 L127 123 L123 127 L118 130 L115 138 L111 145 L108 144 L107 136 L107 128 L109 117 L110 108 L100 95 L100 89 Z"></path>
+
+      <path class="landmass" d="M294 112 L294 116 L295 124 L302 124 L309 122 L313 122 L318 125 L324 128 L327 128 L330 125 L333 119 L333 116 L330 112 L325 107 L322 101 L316 102 L310 102 L302 108 Z"></path>
+
+      <path class="landmass" d="M353 124 L355 127 L358 128 L357 129 L354 131 L353 128 Z M348 134 L351 132 L353 131 L351 135 L349 136 L346 134 Z"></path>
+
+      <g id="satellite-layer"></g>
+    </svg>
+  </div>
+
+  <div id="status">Loading satellite positions&hellip;</div>
+
+  <div id="panel">
+    <button id="panel-close" aria-label="Close">&times;</button>
+    <h2 id="panel-name">&mdash;</h2>
+    <div class="norad-id" id="panel-norad">&mdash;</div>
+
+    <div class="field-row"><span class="label">Latitude</span><span id="panel-lat">&mdash;</span></div>
+    <div class="field-row"><span class="label">Longitude</span><span id="panel-lon">&mdash;</span></div>
+    <div class="field-row"><span class="label">Altitude</span><span id="panel-alt">&mdash;</span></div>
+    <div class="field-row"><span class="label">TLE epoch age</span><span id="panel-epoch">&mdash;</span></div>
+    <div id="panel-stale-badge" class="badge-stale" style="display: none;">Stale TLE (&gt;72h old)</div>
+
+    <div id="conjunctions-section">
+      <h3>Conjunctions (next 72h)</h3>
+      <div id="conjunctions-list" class="loading">Loading&hellip;</div>
+    </div>
+
+    <div id="disclaimer">
+      Geometric miss distance only, computed from public TLEs via SGP4. This
+      is <strong>not</strong> a collision probability and does not account
+      for TLE covariance.
+    </div>
+  </div>
+
+  <script>
+    // Curated set of well-known, long-lived satellites. Any id that 404s
+    // (not present in the locally ingested catalog) is skipped silently.
+    var SATELLITES = [
+      25544, // ISS (ZARYA)
+      20580, // HST
+      25994, // TERRA
+      27424, // AQUA
+      28654, // NOAA 18
+      33591, // NOAA 19
+      39084, // LANDSAT 8
+      37849, // SUOMI NPP
+      41866, // GOES 16
+      43013  // NOAA 20
+    ];
+
+    var REFRESH_MS = 30000;
+    var STALE_HOURS = 72;
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var satelliteLayer = document.getElementById("satellite-layer");
+    var statusEl = document.getElementById("status");
+    var markers = {};
+    var latest = {};
+
+    function project(lon, lat) {
+      var normLon = ((lon + 180) % 360 + 360) % 360 - 180;
+      return { x: normLon + 180, y: 90 - lat };
+    }
+
+    function markerFor(id) {
+      if (markers[id]) return markers[id];
+      var circle = document.createElementNS(svgNS, "circle");
+      circle.setAttribute("class", "satellite");
+      circle.setAttribute("r", "1.3");
+      circle.addEventListener("click", function () {
+        openPanel(id);
+      });
+      satelliteLayer.appendChild(circle);
+      markers[id] = circle;
+      return circle;
+    }
+
+    function removeMarker(id) {
+      if (markers[id]) {
+        markers[id].remove();
+        delete markers[id];
+      }
+    }
+
+    async function refreshOne(id) {
+      try {
+        var res = await fetch("/satellites/" + id + "/position");
+        if (!res.ok) {
+          removeMarker(id);
+          delete latest[id];
+          return;
+        }
+        var data = await res.json();
+        latest[id] = data;
+        var pos = project(data.lon, data.lat);
+        var circle = markerFor(id);
+        circle.setAttribute("cx", pos.x);
+        circle.setAttribute("cy", pos.y);
+        circle.classList.toggle("stale", !!data.stale);
+      } catch (err) {
+        removeMarker(id);
+        delete latest[id];
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all(SATELLITES.map(refreshOne));
+      var count = Object.keys(latest).length;
+      statusEl.textContent = count + "/" + SATELLITES.length +
+        " satellites tracked — last update " + new Date().toLocaleTimeString();
+    }
+
+    var panel = document.getElementById("panel");
+    document.getElementById("panel-close").addEventListener("click", function () {
+      panel.classList.remove("open");
+    });
+
+    async function openPanel(id) {
+      var data = latest[id];
+      if (!data) return;
+
+      document.getElementById("panel-name").textContent = data.name;
+      document.getElementById("panel-norad").textContent = "NORAD ID " + data.norad_id;
+      document.getElementById("panel-lat").textContent = data.lat.toFixed(2) + "°";
+      document.getElementById("panel-lon").textContent = data.lon.toFixed(2) + "°";
+      document.getElementById("panel-alt").textContent = data.alt_km.toFixed(1) + " km";
+      document.getElementById("panel-epoch").textContent = data.epoch_age_hours.toFixed(1) + " h";
+
+      var staleBadge = document.getElementById("panel-stale-badge");
+      staleBadge.style.display = data.stale ? "block" : "none";
+
+      panel.classList.add("open");
+
+      var listEl = document.getElementById("conjunctions-list");
+      listEl.className = "loading";
+      listEl.textContent = "Loading…";
+
+      try {
+        var res = await fetch("/conjunctions/" + id + "?hours=" + STALE_HOURS);
+        if (!res.ok) throw new Error("conjunctions request failed");
+        var payload = await res.json();
+        var items = payload.conjunctions || [];
+        if (items.length === 0) {
+          listEl.className = "empty";
+          listEl.textContent = "No conjunctions found in this window.";
+        } else {
+          listEl.className = "";
+          listEl.innerHTML = "";
+          items.forEach(function (c) {
+            var div = document.createElement("div");
+            div.className = "conjunction-item";
+
+            var nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = c.other_name;
+
+            var tcaEl = document.createElement("div");
+            tcaEl.textContent = "TCA: " + new Date(c.tca_utc).toLocaleString();
+
+            var missEl = document.createElement("div");
+            missEl.className = "miss";
+            missEl.textContent = "miss distance: " + c.miss_distance_km.toFixed(2) + " km";
+
+            div.appendChild(nameEl);
+            div.appendChild(tcaEl);
+            div.appendChild(missEl);
+            listEl.appendChild(div);
+          });
+        }
+      } catch (err) {
+        listEl.className = "empty";
+        listEl.textContent = "Could not load conjunctions.";
+      }
+    }
+
+    refreshAll();
+    setInterval(refreshAll, REFRESH_MS);
+  </script>
+</body>
+</html>
