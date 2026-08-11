@@ -6,13 +6,16 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
+
+DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
 
 app = FastAPI(
     title="kessler",
@@ -80,6 +83,25 @@ def get_db() -> Iterator[sqlite3.Connection]:
 async def health() -> dict[str, str]:
     """Return service health status. Always open, even when API keys are configured."""
     return {"status": "ok"}
+
+
+@app.get(
+    "/demo",
+    tags=["demo"],
+    summary="Live demo map of the API",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def get_demo() -> HTMLResponse:
+    """Serve a self-contained HTML page plotting live positions for a curated
+    set of well-known satellites on a 2D map.
+
+    This is a shop window for the API, not a product UI: plain HTML/CSS/JS,
+    no build step and no external dependencies. It calls the existing
+    `/satellites/{norad_id}/position` and `/conjunctions/{norad_id}`
+    endpoints from the browser.
+    """
+    return HTMLResponse(DEMO_HTML_PATH.read_text())
 
 
 @app.get(

@@ -57,6 +57,20 @@ variable (default: `kessler.db` in the working directory).
 Interactive OpenAPI docs (with request/response examples) are served at
 `/docs` once the app is running.
 
+### Live demo map
+
+`GET /demo` serves a self-contained HTML page (plain HTML/CSS/JS, no build
+step, no external dependencies) that plots live positions for a curated set
+of ~21 well-known satellites (ISS and others) on a 2D map, refreshed every
+30 seconds. Clicking a satellite opens a side panel with its position
+details and current conjunctions, pulled from the endpoints below. It's a
+shop window for the API, not a product UI — satellites missing from your
+locally ingested catalog are skipped silently.
+
+```bash
+open "http://localhost:8000/demo"
+```
+
 ### Check service health
 
 ```bash
