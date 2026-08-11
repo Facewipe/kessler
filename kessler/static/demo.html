@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kessler — live demo</title>
+<style>
+  :root {
+    --ocean: #0c1116;
+    --land: #262f38;
+    --coastline: #4d5b68;
+    --graticule: rgba(255, 255, 255, 0.07);
+    --accent: #ffcc66;
+    --text: #c9d1d9;
+    --muted-text: #8b949e;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    background: #05070a;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 24px 16px 40px;
+  }
+
+  header {
+    max-width: 960px;
+    margin: 0 auto 16px;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+
+  #status {
+    color: var(--muted-text);
+    margin: 0;
+  }
+
+  #map-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  #map {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: var(--ocean);
+    border: 1px solid #1c2229;
+    border-radius: 4px;
+  }
+
+  .ocean {
+    fill: var(--ocean);
+  }
+
+  .land {
+    fill: var(--land);
+    stroke: var(--coastline);
+    stroke-width: 0.4;
+  }
+
+  .graticule {
+    stroke: var(--graticule);
+    stroke-width: 0.3;
+    fill: none;
+  }
+
+  .satellite-marker {
+    fill: var(--accent);
+    stroke: #1a1300;
+    stroke-width: 0.3;
+  }
+
+  #missing {
+    max-width: 960px;
+    margin: 12px auto 0;
+    padding: 10px 12px;
+    border: 1px solid #4d3a1f;
+    background: #1a140a;
+    color: #e3b341;
+    font-size: 0.85rem;
+    border-radius: 4px;
+  }
+
+  #missing[hidden] {
+    display: none;
+  }
+
+  footer {
+    max-width: 960px;
+    margin: 16px auto 0;
+    color: var(--muted-text);
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>kessler — live demo</h1>
+  <p id="status">Loading satellite positions…</p>
+</header>
+
+<div id="map-wrap">
+  <svg id="map" viewBox="-180 -90 360 180" xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Equirectangular world map with satellite positions">
+    <rect class="ocean" x="-180" y="-90" width="360" height="180" />
+
+    <g class="land">
+      <path data-region="north-america" d="M -168,-66 L -165,-59 L -159,-55 L -135,-58 L -130,-55 L -125,-49 L -124,-40 L -117,-32 L -105,-20 L -97,-19 L -90,-16 L -88,-21 L -97,-26 L -93,-29 L -89,-30 L -81,-25 L -80,-31 L -75,-35 L -74,-40 L -70,-41 L -66,-44 L -60,-46 L -55,-52 L -58,-60 L -65,-63 L -75,-62 L -85,-67 L -95,-70 L -110,-70 L -125,-70 L -140,-70 L -155,-71 L -165,-68 Z" />
+      <path data-region="greenland" d="M -73,-60 L -58,-60 L -45,-60 L -20,-70 L -20,-77 L -40,-83 L -60,-82 L -73,-76 Z" />
+      <path data-region="south-america" d="M -77,-8 L -72,-7 L -62,-10 L -60,-5 L -51,0 L -48,5 L -35,8 L -39,17 L -41,23 L -48,26 L -58,34 L -62,38 L -65,42 L -68,52 L -73,53 L -72,45 L -71,33 L -70,18 L -77,4 L -79,-3 Z" />
+      <path data-region="africa" d="M -17,-21 L -16,-14 L -11,-7 L -9,-5 L 3,-6 L 9,-4 L 13,5 L 12,15 L 14,22 L 18,34 L 26,33 L 33,27 L 35,19 L 40,15 L 43,3 L 51,-11 L 43,-13 L 39,-15 L 35,-28 L 32,-31 L 25,-32 L 11,-37 L 0,-35 L -6,-35 L -9,-30 Z" />
+      <path data-region="madagascar" d="M 43,12 L 50,16 L 47,25 L 44,20 Z" />
+      <path data-region="eurasia" d="M -9,-43 L -9,-36 L 10,-37 L 20,-35 L 27,-37 L 36,-37 L 34,-29 L 43,-13 L 56,-25 L 61,-25 L 68,-24 L 72,-21 L 77,-8 L 88,-22 L 94,-16 L 98,-8 L 104,-1 L 106,-11 L 109,-13 L 108,-21 L 110,-21 L 117,-23 L 121,-31 L 122,-37 L 129,-35 L 131,-40 L 135,-48 L 142,-52 L 160,-60 L 170,-66 L 180,-68 L 178,-66 L 160,-70 L 140,-73 L 110,-73 L 90,-73 L 70,-72 L 60,-70 L 45,-68 L 30,-70 L 25,-60 L 18,-58 L 11,-58 L 5,-58 L 4,-51 L -2,-49 L -5,-48 Z" />
+      <path data-region="japan" d="M 130,-31 L 132,-33 L 136,-34 L 140,-36 L 141,-39 L 142,-40 L 140,-41 L 139,-35 L 135,-34 Z" />
+      <path data-region="ireland" d="M -10,-51 L -8,-55 L -6,-55 L -6,-52 Z" />
+      <path data-region="uk" d="M -5,-50 L -3,-51 L 1,-51 L 0,-53 L -3,-55 L -5,-58 L -6,-57 L -5,-54 L -3,-53 Z" />
+      <path data-region="sumatra-java" d="M 95,-5 L 106,6 L 115,9 L 119,9 L 115,4 L 106,-1 Z" />
+      <path data-region="borneo" d="M 109,-4 L 117,-4 L 119,4 L 110,3 Z" />
+      <path data-region="philippines" d="M 120,-18 L 122,-14 L 126,-9 L 124,-7 L 121,-10 L 120,-14 Z" />
+      <path data-region="new-zealand" d="M 173,41 L 178,38 L 175,34 L 172,41 L 166,46 L 168,44 Z" />
+      <path data-region="australia" d="M 113,22 L 114,28 L 115,33 L 118,35 L 129,32 L 131,32 L 136,35 L 138,35 L 140,38 L 144,38 L 147,38 L 150,37 L 153,29 L 153,25 L 146,19 L 143,15 L 142,11 L 137,12 L 136,12 L 132,12 L 130,12 L 126,14 L 123,17 L 114,22 Z" />
+      <path data-region="antarctica" d="M -180,90 L 180,90 L 180,65 L 90,70 L 0,66 L -90,70 L -180,65 Z" />
+    </g>
+
+    <g class="graticule">
+      <line x1="-150" y1="-90" x2="-150" y2="90" />
+      <line x1="-120" y1="-90" x2="-120" y2="90" />
+      <line x1="-90" y1="-90" x2="-90" y2="90" />
+      <line x1="-60" y1="-90" x2="-60" y2="90" />
+      <line x1="-30" y1="-90" x2="-30" y2="90" />
+      <line x1="0" y1="-90" x2="0" y2="90" />
+      <line x1="30" y1="-90" x2="30" y2="90" />
+      <line x1="60" y1="-90" x2="60" y2="90" />
+      <line x1="90" y1="-90" x2="90" y2="90" />
+      <line x1="120" y1="-90" x2="120" y2="90" />
+      <line x1="150" y1="-90" x2="150" y2="90" />
+      <line x1="-180" y1="-60" x2="180" y2="-60" />
+      <line x1="-180" y1="-30" x2="180" y2="-30" />
+      <line x1="-180" y1="0" x2="180" y2="0" />
+      <line x1="-180" y1="30" x2="180" y2="30" />
+      <line x1="-180" y1="60" x2="180" y2="60" />
+    </g>
+
+    <g id="markers"></g>
+  </svg>
+</div>
+
+<div id="missing" hidden></div>
+
+<footer>
+  Geometric positions from public TLEs (SGP4). Not a collision probability —
+  see <code>docs/accuracy.md</code>.
+</footer>
+
+<script>
+  // Curated NORAD IDs for the demo. Not every ID is guaranteed to be in the
+  // catalog (e.g. it may be stale/decayed/not yet ingested); IDs that come
+  // back 404 are reported below instead of silently dropped.
+  const CURATED_SATELLITES = [
+    [25544, "ISS (ZARYA)"],
+    [20580, "HST"],
+    [25994, "TERRA"],
+    [27424, "AQUA"],
+    [28654, "NOAA 18"],
+    [33591, "NOAA 19"],
+    [43013, "NOAA 20"],
+    [39084, "LANDSAT 8"],
+    [49260, "LANDSAT 9"],
+    [39634, "SENTINEL-1A"],
+    [40697, "SENTINEL-2A"],
+    [41335, "SENTINEL-3A"],
+    [43205, "STARLINK-1007"],
+    [44713, "STARLINK-1130"],
+    [41019, "GPS BIIF-12"],
+    [24876, "GPS BIIR-2"],
+    [27386, "ENVISAT"],
+    [29155, "GOES 13"],
+    [22675, "COSMOS 2251 DEB"],
+    [37849, "GOES 15"],
+    [39533, "METOP-B"],
+  ];
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  async function fetchSatellite([noradId, label]) {
+    try {
+      const response = await fetch(`/satellites/${noradId}/position`);
+      if (response.status === 404) {
+        return { noradId, label, found: false };
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return { noradId, label, found: true, data };
+    } catch (err) {
+      console.error(
+        `kessler demo: failed to fetch position for NORAD ${noradId} (${label})`,
+        err
+      );
+      return { noradId, label, found: false };
+    }
+  }
+
+  function plotMarker(result) {
+    const { data } = result;
+    const marker = document.createElementNS(SVG_NS, "circle");
+    marker.setAttribute("cx", data.lon.toFixed(2));
+    marker.setAttribute("cy", (-data.lat).toFixed(2));
+    marker.setAttribute("r", "1.4");
+    marker.setAttribute("class", "satellite-marker");
+
+    const title = document.createElementNS(SVG_NS, "title");
+    const staleNote = data.stale ? " — stale TLE" : "";
+    title.textContent = `${data.name} (NORAD ${result.noradId})${staleNote}`;
+    marker.appendChild(title);
+
+    document.getElementById("markers").appendChild(marker);
+  }
+
+  function renderMissing(missing) {
+    if (missing.length === 0) {
+      return;
+    }
+    const summary = missing.map((r) => `${r.label} (${r.noradId})`).join(", ");
+    console.warn(
+      `kessler demo: ${missing.length} curated satellite(s) not found in the catalog — ` +
+        "the curated list may be stale:",
+      summary
+    );
+    const missingEl = document.getElementById("missing");
+    missingEl.hidden = false;
+    missingEl.textContent = `Not found in catalog (curated list may be stale): ${summary}`;
+  }
+
+  async function init() {
+    const results = await Promise.all(CURATED_SATELLITES.map(fetchSatellite));
+    const found = results.filter((r) => r.found);
+    const missing = results.filter((r) => !r.found);
+
+    document.getElementById("status").textContent =
+      `${found.length} / ${CURATED_SATELLITES.length} satellites plotted`;
+
+    found.forEach(plotMarker);
+    renderMissing(missing);
+  }
+
+  init();
+</script>
+</body>
+</html>

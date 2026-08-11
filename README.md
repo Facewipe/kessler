@@ -57,6 +57,21 @@ variable (default: `kessler.db` in the working directory).
 Interactive OpenAPI docs (with request/response examples) are served at
 `/docs` once the app is running.
 
+### Live demo map
+
+`/demo` serves a self-contained HTML page that plots a curated set of
+well-known satellites on a world map, using the position endpoint below for
+each one. It's a static file with no build step and no external tile
+server/CDN — the world outline is embedded as inline SVG. The header reports
+`N / M satellites plotted`; any curated NORAD ID that comes back `404` (e.g.
+because it hasn't been ingested, or has decayed and dropped out of the
+catalog) is listed underneath and logged to the browser console, so it's easy
+to tell when the curated list needs updating.
+
+```bash
+open "http://localhost:8000/demo"
+```
+
 ### Check service health
 
 ```bash

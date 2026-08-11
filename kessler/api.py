@@ -6,13 +6,16 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
     title="kessler",
@@ -80,6 +83,12 @@ def get_db() -> Iterator[sqlite3.Connection]:
 async def health() -> dict[str, str]:
     """Return service health status. Always open, even when API keys are configured."""
     return {"status": "ok"}
+
+
+@app.get("/demo", include_in_schema=False)
+async def demo_page() -> FileResponse:
+    """Serve the interactive world-map demo page (static HTML/CSS/JS, no build step)."""
+    return FileResponse(STATIC_DIR / "demo.html", media_type="text/html")
 
 
 @app.get(
