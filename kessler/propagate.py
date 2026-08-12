@@ -45,6 +45,7 @@ class Position:
     lon_deg: float
     alt_km: float
     teme_km: tuple[float, float, float]
+    ecef_km: tuple[float, float, float]
 
 
 def satrec_from_tle(line1: str, line2: str) -> Satrec:
@@ -77,7 +78,9 @@ def position_at(satrec: Satrec, at: datetime) -> Position:
     theta = _gmst_radians(jd, fr)
     ecef_km = _teme_to_ecef(teme_km, theta)
     lat_deg, lon_deg, alt_km = _ecef_to_geodetic(ecef_km)
-    return Position(lat_deg=lat_deg, lon_deg=lon_deg, alt_km=alt_km, teme_km=teme_km)
+    return Position(
+        lat_deg=lat_deg, lon_deg=lon_deg, alt_km=alt_km, teme_km=teme_km, ecef_km=ecef_km
+    )
 
 
 def _gmst_radians(jd: float, fr: float) -> float:
@@ -98,6 +101,23 @@ def _teme_to_ecef(teme_km: tuple[float, float, float], theta: float) -> tuple[fl
     x, y, z = teme_km
     cos_t, sin_t = math.cos(theta), math.sin(theta)
     return (x * cos_t + y * sin_t, -x * sin_t + y * cos_t, z)
+
+
+def geodetic_to_ecef(lat_deg: float, lon_deg: float, alt_km: float) -> tuple[float, float, float]:
+    """Convert WGS84 geodetic lat/lon (deg) and altitude (km) to ECEF (km).
+
+    Inverse of `_ecef_to_geodetic`, used to place a ground observer (given as
+    lat/lon/alt rather than a propagated TLE) into the same ECEF frame as a
+    satellite for topocentric look-angle computation.
+    """
+    lat = math.radians(lat_deg)
+    lon = math.radians(lon_deg)
+    sin_lat, cos_lat = math.sin(lat), math.cos(lat)
+    n = _WGS84_A_KM / math.sqrt(1 - _WGS84_E2 * sin_lat**2)
+    x = (n + alt_km) * cos_lat * math.cos(lon)
+    y = (n + alt_km) * cos_lat * math.sin(lon)
+    z = (n * (1 - _WGS84_E2) + alt_km) * sin_lat
+    return x, y, z
 
 
 def _ecef_to_geodetic(ecef_km: tuple[float, float, float]) -> tuple[float, float, float]:
