@@ -61,11 +61,19 @@ Interactive OpenAPI docs (with request/response examples) are served at
 
 `GET /demo` serves a self-contained HTML page (plain HTML/CSS/JS, no build
 step, no external dependencies) that plots live positions for a curated set
-of ~21 well-known satellites (ISS and others) on a 2D map, refreshed every
+of ~20 well-known satellites (ISS and others) on a 2D map, refreshed every
 30 seconds. Clicking a satellite opens a side panel with its position
-details and current conjunctions, pulled from the endpoints below. It's a
-shop window for the API, not a product UI — satellites missing from your
-locally ingested catalog are skipped silently.
+details and current conjunctions, pulled from the endpoints below. Stale
+(>72h) satellites are drawn in a distinct colour, per the legend on the
+page. It's a shop window for the API, not a product UI — satellites
+missing from your locally ingested catalog are skipped silently.
+
+The map's coastlines come from `GET /world.json`, a small file of
+simplified land polygons built ahead of time by `scripts/build_map.py`
+from [Natural Earth](https://www.naturalearthdata.com/) 110m land data
+and committed to the repo, so the demo page renders offline with no
+runtime download from a third party. Run `python scripts/build_map.py`
+to regenerate it.
 
 ```bash
 open "http://localhost:8000/demo"
