@@ -175,6 +175,52 @@ collision probability.
 Returns `404` for an unknown `norad_id` and `422` for `hours`,
 `threshold_km`, or `min_separation_km` outside their allowed ranges.
 
+### List satellites currently overhead
+
+```bash
+curl "http://localhost:8000/overhead?lat=51.5074&lon=-0.1278&min_elevation_deg=10"
+```
+
+`lat` (-90 to 90) and `lon` (-180 to 180) are required. `min_elevation_deg`
+(0-90, default 10) sets the minimum elevation above the horizon to report;
+`alt_m` (default 0) is the observer's altitude above the WGS84 ellipsoid, in
+meters.
+
+Example response:
+
+```json
+{
+  "at": "2026-08-12T12:00:00+00:00",
+  "observer": {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0},
+  "min_elevation_deg": 10.0,
+  "count": 1,
+  "satellites": [
+    {
+      "norad_id": 25544,
+      "name": "ISS (ZARYA)",
+      "elevation_deg": 45.213,
+      "azimuth_deg": 132.704,
+      "range_km": 850.331,
+      "alt_km": 420.123,
+      "epoch_age_hours": 5.1,
+      "stale": false
+    }
+  ]
+}
+```
+
+Propagates the whole catalog to the current time. To keep this fast against
+a large catalog, each satellite is first pruned by the great-circle ground
+distance between the observer and its sub-satellite point — comparing that
+against the maximum ground range at which a satellite at its altitude could
+possibly clear `min_elevation_deg` — before the more expensive topocentric
+(elevation/azimuth/range) conversion runs, which only happens for satellites
+that survive the coarse filter. `azimuth_deg` is measured clockwise from
+north. Results are sorted by elevation, descending.
+
+Returns `422` for `lat`, `lon`, or `min_elevation_deg` outside their allowed
+ranges.
+
 ## Authentication
 
 By default the API is open (dev mode) — no key required. To require an API

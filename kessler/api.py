@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
+from kessler.overhead import DEFAULT_MIN_ELEVATION_DEG, find_overhead
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
@@ -266,5 +267,85 @@ async def get_conjunctions(
                 "other_epoch_age_hours": round(r.other_epoch_age_hours, 3),
             }
             for r in results
+        ],
+    }
+
+
+@app.get(
+    "/overhead",
+    tags=["satellites"],
+    summary="List catalog satellites currently above an observer's horizon",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "at": "2026-08-12T12:00:00+00:00",
+                        "observer": {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0},
+                        "min_elevation_deg": 10.0,
+                        "count": 1,
+                        "satellites": [
+                            {
+                                "norad_id": 25544,
+                                "name": "ISS (ZARYA)",
+                                "elevation_deg": 45.213,
+                                "azimuth_deg": 132.704,
+                                "range_km": 850.331,
+                                "alt_km": 420.123,
+                                "epoch_age_hours": 5.1,
+                                "stale": False,
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+        422: {"description": "`lat`, `lon`, or `min_elevation_deg` outside their allowed ranges"},
+    },
+)
+async def get_overhead(
+    lat: float = Query(..., ge=-90, le=90, description="Observer latitude, degrees."),
+    lon: float = Query(..., ge=-180, le=180, description="Observer longitude, degrees."),
+    min_elevation_deg: float = Query(
+        default=DEFAULT_MIN_ELEVATION_DEG,
+        ge=0,
+        le=90,
+        description="Minimum elevation above the horizon to report, degrees.",
+    ),
+    alt_m: float = Query(
+        default=0.0, description="Observer altitude above the WGS84 ellipsoid, meters."
+    ),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, object]:
+    """Return every catalog satellite above the observer's horizon right now.
+
+    Propagates the full catalog to the current time, prunes by ground-track
+    distance from the observer before the full topocentric conversion (see
+    `kessler.overhead`), and returns satellites at or above
+    `min_elevation_deg`, sorted by elevation descending.
+    """
+    at = datetime.now(UTC)
+    catalog = list_satellites(conn)
+    satellites = find_overhead(
+        catalog, lat, lon, alt_m / 1000.0, at, min_elevation_deg, STALE_THRESHOLD_HOURS
+    )
+
+    return {
+        "at": at.isoformat(),
+        "observer": {"lat": lat, "lon": lon, "alt_m": alt_m},
+        "min_elevation_deg": min_elevation_deg,
+        "count": len(satellites),
+        "satellites": [
+            {
+                "norad_id": s.norad_id,
+                "name": s.name,
+                "elevation_deg": round(s.elevation_deg, 3),
+                "azimuth_deg": round(s.azimuth_deg, 3),
+                "range_km": round(s.range_km, 3),
+                "alt_km": round(s.alt_km, 3),
+                "epoch_age_hours": round(s.epoch_age_hours, 3),
+                "stale": s.stale,
+            }
+            for s in satellites
         ],
     }
