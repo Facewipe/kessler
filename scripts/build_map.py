@@ -147,10 +147,7 @@ def main() -> int:
         encoded = build_world_json(rings, tolerance_deg)
 
     OUTPUT_PATH.write_bytes(encoded)
-    print(
-        f"Wrote {OUTPUT_PATH} ({len(encoded) / 1024:.1f} KB, "
-        f"tolerance={tolerance_deg:.3f} deg)"
-    )
+    print(f"Wrote {OUTPUT_PATH} ({len(encoded) / 1024:.1f} KB, tolerance={tolerance_deg:.3f} deg)")
 
     if len(encoded) > SIZE_BUDGET_BYTES:
         print(

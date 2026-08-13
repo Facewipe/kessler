@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from kessler.api import app, get_db
+from kessler.api import AUTO_INGEST_ENV_VAR, app, get_db
 from kessler.db import SatelliteRecord, get_connection, upsert_satellite
 
 # SGP4 validation test satellite from Vallado, Crawford, Hujsak & Kelso,
@@ -15,6 +15,15 @@ TEST_NORAD_ID = 5
 TEST_SATELLITE_NAME = "SGP4-VER TEST SATELLITE 5"
 TEST_TLE_LINE1 = "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753"
 TEST_TLE_LINE2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667"
+
+
+@pytest.fixture(autouse=True)
+def _disable_auto_ingest(monkeypatch):
+    """Disable startup/periodic auto-ingest for every test, so a test that
+    exercises the app's lifespan (via `with TestClient(app) as ...`) never
+    makes a real network call to Celestrak.
+    """
+    monkeypatch.setenv(AUTO_INGEST_ENV_VAR, "0")
 
 
 @pytest.fixture

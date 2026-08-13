@@ -92,6 +92,19 @@ def list_satellites(conn: sqlite3.Connection) -> list[SatelliteRecord]:
     return [_record_from_row(row) for row in rows]
 
 
+def count_satellites(conn: sqlite3.Connection) -> int:
+    """Return the number of satellites currently stored in the catalog."""
+    return conn.execute("SELECT COUNT(*) FROM satellites").fetchone()[0]
+
+
+def latest_epoch(conn: sqlite3.Connection) -> datetime | None:
+    """Return the newest TLE epoch in the catalog, or None if it's empty."""
+    row = conn.execute("SELECT MAX(epoch_utc) FROM satellites").fetchone()
+    if row is None or row[0] is None:
+        return None
+    return datetime.fromisoformat(row[0])
+
+
 def _record_from_row(row: tuple[int, str, str, str, str | None]) -> SatelliteRecord:
     norad_id, name, line1, line2, epoch_utc = row
     return SatelliteRecord(

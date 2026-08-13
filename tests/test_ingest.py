@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kessler import db
-from kessler.ingest import main, parse_tle_records
+from kessler.ingest import main, parse_tle_records, run_ingest
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -65,3 +65,17 @@ def test_cli_run_twice_does_not_duplicate(tmp_path, monkeypatch):
         conn.close()
 
     assert count == 10
+
+
+def test_run_ingest_returns_summary(tmp_path, monkeypatch):
+    db_path = tmp_path / "kessler.db"
+    text = (FIXTURES / "valid_tles.txt").read_text()
+    monkeypatch.setattr("kessler.ingest.fetch_tle_text", lambda: text)
+
+    summary = run_ingest(db_path)
+
+    assert summary.fetched == 10
+    assert summary.inserted == 10
+    assert summary.updated == 0
+    assert summary.skipped == 0
+    assert str(summary) == ("records fetched: 10 / inserted: 10 / updated: 0 / skipped: 0")

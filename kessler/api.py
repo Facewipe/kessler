@@ -2,22 +2,95 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from kessler.db import DEFAULT_DB_PATH, get_connection, get_satellite, list_satellites
+from kessler.db import (
+    DEFAULT_DB_PATH,
+    count_satellites,
+    get_connection,
+    get_satellite,
+    latest_epoch,
+    list_satellites,
+)
+from kessler.ingest import run_ingest
 from kessler.overhead import DEFAULT_MIN_ELEVATION_DEG, find_overhead
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
+logger = logging.getLogger(__name__)
+
 DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
 WORLD_JSON_PATH = Path(__file__).parent / "static" / "world.json"
+
+AUTO_INGEST_ENV_VAR = "KESSLER_AUTO_INGEST"
+INGEST_REFRESH_INTERVAL_HOURS = 12.0
+
+
+def _auto_ingest_enabled() -> bool:
+    """Whether startup/periodic auto-ingest is enabled (on by default).
+
+    Set `KESSLER_AUTO_INGEST=0` to disable, e.g. in tests, so the app never
+    makes a network call on startup.
+    """
+    return os.environ.get(AUTO_INGEST_ENV_VAR, "1").strip().lower() not in {"0", "false", "no"}
+
+
+async def _ingest_and_log(reason: str) -> None:
+    """Run catalog ingestion off the event loop and log a one-line summary."""
+    db_path = os.environ.get("KESSLER_DB_PATH", DEFAULT_DB_PATH)
+    try:
+        summary = await asyncio.to_thread(run_ingest, db_path)
+    except Exception:
+        logger.exception("Catalog ingest (%s) failed", reason)
+        return
+    logger.info("Catalog ingest (%s): %s", reason, summary)
+
+
+async def _startup_ingest_if_empty() -> None:
+    """Run ingest once at startup if the catalog is empty (fresh deploy/volume)."""
+    db_path = os.environ.get("KESSLER_DB_PATH", DEFAULT_DB_PATH)
+    conn = get_connection(db_path)
+    try:
+        empty = count_satellites(conn) == 0
+    finally:
+        conn.close()
+    if empty:
+        await _ingest_and_log("startup, empty catalog")
+
+
+async def _periodic_ingest_refresh() -> None:
+    """Re-run ingest every `INGEST_REFRESH_INTERVAL_HOURS` for the app's lifetime."""
+    while True:
+        await asyncio.sleep(INGEST_REFRESH_INTERVAL_HOURS * 3600)
+        await _ingest_and_log("scheduled refresh")
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start background catalog ingestion tasks for the app's lifetime."""
+    background_tasks: list[asyncio.Task[None]] = []
+    if _auto_ingest_enabled():
+        background_tasks.append(asyncio.create_task(_startup_ingest_if_empty()))
+        background_tasks.append(asyncio.create_task(_periodic_ingest_refresh()))
+    try:
+        yield
+    finally:
+        for task in background_tasks:
+            task.cancel()
+        for task in background_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
 
 app = FastAPI(
     title="kessler",
@@ -35,6 +108,7 @@ app = FastAPI(
         "(dev-mode) access."
     ),
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 STALE_THRESHOLD_HOURS = 72.0
@@ -80,11 +154,39 @@ def get_db() -> Iterator[sqlite3.Connection]:
     "/health",
     tags=["health"],
     summary="Service health check",
-    responses={200: {"content": {"application/json": {"example": {"status": "ok"}}}}},
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "ok",
+                        "catalog_size": 8412,
+                        "newest_tle_epoch_utc": "2026-08-13T09:12:00+00:00",
+                        "newest_tle_epoch_age_hours": 3.1,
+                    }
+                }
+            }
+        }
+    },
 )
-async def health() -> dict[str, str]:
-    """Return service health status. Always open, even when API keys are configured."""
-    return {"status": "ok"}
+async def health(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, object]:
+    """Return service health plus catalog freshness. Always open, even when API keys are configured.
+
+    `catalog_size` and `newest_tle_epoch_age_hours` make deployment problems
+    (empty catalog, stalled ingestion) visible without digging into logs.
+    """
+    newest_epoch = latest_epoch(conn)
+    newest_epoch_age_hours = (
+        round((datetime.now(UTC) - newest_epoch).total_seconds() / 3600, 3)
+        if newest_epoch is not None
+        else None
+    )
+    return {
+        "status": "ok",
+        "catalog_size": count_satellites(conn),
+        "newest_tle_epoch_utc": newest_epoch.isoformat() if newest_epoch is not None else None,
+        "newest_tle_epoch_age_hours": newest_epoch_age_hours,
+    }
 
 
 @app.get(
