@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 
@@ -88,11 +90,32 @@ def parse_tle_records(text: str) -> list[SatelliteRecord]:
     return records
 
 
-def main() -> None:
-    """Entry point for `python -m kessler.ingest`: fetch, upsert, print a summary."""
-    logging.basicConfig(level=logging.INFO)
+@dataclass(frozen=True)
+class IngestSummary:
+    """Summary of one `run_ingest()` call."""
 
-    db_path = os.environ.get("KESSLER_DB_PATH", DEFAULT_DB_PATH)
+    fetched: int
+    inserted: int
+    updated: int
+    skipped: int
+
+    def __str__(self) -> str:
+        return (
+            f"records fetched: {self.fetched} / inserted: {self.inserted} / "
+            f"updated: {self.updated} / skipped: {self.skipped}"
+        )
+
+
+def run_ingest(db_path: str | Path | None = None) -> IngestSummary:
+    """Fetch the Celestrak catalog and upsert it into `db_path`.
+
+    `db_path` defaults to the `KESSLER_DB_PATH` environment variable (or
+    `DEFAULT_DB_PATH` if unset). Used both by the `python -m kessler.ingest`
+    CLI and by the API's startup/periodic auto-ingest.
+    """
+    if db_path is None:
+        db_path = os.environ.get("KESSLER_DB_PATH", DEFAULT_DB_PATH)
+
     text = fetch_tle_text()
     total = len(_iter_raw_records(text))
     records = parse_tle_records(text)
@@ -103,11 +126,18 @@ def main() -> None:
     finally:
         conn.close()
 
-    skipped = total - result.inserted - result.updated
-    print(
-        f"records fetched: {total} / inserted: {result.inserted} / "
-        f"updated: {result.updated} / skipped: {skipped}"
+    return IngestSummary(
+        fetched=total,
+        inserted=result.inserted,
+        updated=result.updated,
+        skipped=total - result.inserted - result.updated,
     )
+
+
+def main() -> None:
+    """Entry point for `python -m kessler.ingest`: fetch, upsert, print a summary."""
+    logging.basicConfig(level=logging.INFO)
+    print(run_ingest())
 
 
 if __name__ == "__main__":

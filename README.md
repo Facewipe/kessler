@@ -11,11 +11,12 @@ a collision probability.
 pip install -e ".[dev]"
 
 # 2. Seed a demo satellite into SQLite
-# (python -m kessler.ingest, which fetches the live Celestrak catalog, is
-# still a WIP stub — this seeds one pinned reference TLE so you have data
-# to query right away. Its epoch is from 2000, so position queries will
-# report `stale: true` unless you pass an `at` near that epoch — that's
-# expected, and a good demonstration of the staleness flag itself.)
+# (python -m kessler.ingest fetches the live Celestrak catalog if you'd
+# rather do that instead — see "TLE ingestion" below. This just seeds one
+# pinned reference TLE so you have data to query right away without a
+# network call. Its epoch is from 2000, so position queries will report
+# `stale: true` unless you pass an `at` near that epoch — that's expected,
+# and a good demonstration of the staleness flag itself.)
 python -c "
 from kessler.db import SatelliteRecord, get_connection, upsert_satellite
 
@@ -37,7 +38,7 @@ Dev commands:
 ```bash
 pytest                                  # tests
 ruff check . && ruff format --check .   # lint
-python -m kessler.ingest                # fetch TLE catalog into SQLite (WIP)
+python -m kessler.ingest                # fetch TLE catalog into SQLite
 ```
 
 ## TLE ingestion
@@ -51,6 +52,13 @@ skipped with a logged warning instead of failing the run.
 
 The database path is configurable via the `KESSLER_DB_PATH` environment
 variable (default: `kessler.db` in the working directory).
+
+When the app itself is running (`uvicorn kessler.api:app`), it also ingests
+automatically: on startup, if the catalog is empty, it runs the same
+ingestion as `python -m kessler.ingest`; from then on it re-runs every 12
+hours in the background, logging a one-line summary. Set
+`KESSLER_AUTO_INGEST=0` to disable both (the test suite does this so tests
+never make a network call).
 
 ## API
 
@@ -86,8 +94,17 @@ curl "http://localhost:8000/health"
 ```
 
 ```json
-{"status": "ok"}
+{
+  "status": "ok",
+  "catalog_size": 8412,
+  "newest_tle_epoch_utc": "2026-08-13T09:12:00+00:00",
+  "newest_tle_epoch_age_hours": 3.1
+}
 ```
+
+`catalog_size` and `newest_tle_epoch_age_hours` (both `0`/`null` on an empty
+catalog) make it easy to tell a deployment is up but hasn't ingested data yet
+versus genuinely unhealthy.
 
 ### Get a satellite's current position
 
@@ -250,6 +267,12 @@ curl "http://localhost:8000/satellites/5/position" -H "X-API-Key: dev-key-1"
 Requests without a valid key get `401 Unauthorized`. Leaving
 `KESSLER_API_KEYS` unset keeps the API fully open, which is the default for
 local development.
+
+## Deployment
+
+See [`docs/deploy.md`](docs/deploy.md) for step-by-step Fly.io deployment
+instructions, including creating the persistent volume the SQLite catalog
+lives on. Locally, `docker build .` builds the same image Fly.io deploys.
 
 ## Python example
 
