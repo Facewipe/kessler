@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler &mdash; sky view</title>
+<style>
+  :root {
+    --bg: #090d16;
+    --panel: #0c1524;
+    --border: #1c2b42;
+    --ring: #23334c;
+    --ring-label: #4a6084;
+    --text: #cfe0f5;
+    --text-dim: #7d93b8;
+    --accent: #7ee3ff;
+    --leo: #7ee3ff;
+    --meo: #ffb454;
+    --geo: #ff6bcb;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1.5rem 1rem 3rem;
+  }
+
+  header {
+    width: 100%;
+    max-width: 480px;
+    text-align: center;
+    margin-bottom: 0.25rem;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  #location {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  #headline {
+    margin: 0.9rem 0 0.2rem;
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-align: center;
+  }
+
+  #headline .n {
+    color: var(--accent);
+  }
+
+  #status {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+    min-height: 1em;
+  }
+
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  #controls span.label {
+    letter-spacing: 0.04em;
+  }
+
+  .elev-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .elev-btn:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .elev-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04121a;
+    font-weight: 600;
+  }
+
+  #chart-wrap {
+    position: relative;
+    width: min(90vw, 460px);
+  }
+
+  svg#chart {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .rim {
+    fill: var(--panel);
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .ring {
+    fill: none;
+    stroke: var(--ring);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+  }
+
+  .ring-label {
+    fill: var(--ring-label);
+    font-size: 9px;
+    text-anchor: middle;
+  }
+
+  .crosshair {
+    stroke: var(--ring);
+    stroke-width: 1;
+  }
+
+  .compass-label {
+    fill: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+    text-anchor: middle;
+    dominant-baseline: middle;
+  }
+
+  .sat-dot {
+    stroke: #04121a;
+    stroke-width: 0.6;
+    cursor: pointer;
+  }
+
+  .sat-dot:hover, .sat-dot.selected {
+    stroke: #ffffff;
+    stroke-width: 1;
+  }
+
+  #legend {
+    display: flex;
+    justify-content: center;
+    gap: 1.1rem;
+    margin-top: 0.9rem;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  #legend .item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  #legend .swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  #tooltip {
+    position: fixed;
+    display: none;
+    z-index: 30;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text);
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+
+  #tooltip .name {
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.15rem;
+  }
+
+  #tooltip .row .k {
+    color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>kessler &mdash; sky view</h1>
+    <div id="location">Locating&hellip;</div>
+  </header>
+
+  <div id="headline"><span class="n">&mdash;</span> satellites above you right now</div>
+  <div id="status">&nbsp;</div>
+
+  <div id="controls">
+    <span class="label">min elevation</span>
+    <button class="elev-btn" data-elevation="10">10&deg;</button>
+    <button class="elev-btn" data-elevation="30">30&deg;</button>
+    <button class="elev-btn" data-elevation="60">60&deg;</button>
+  </div>
+
+  <div id="chart-wrap">
+    <svg id="chart" viewBox="0 0 400 400">
+      <circle class="rim" cx="200" cy="200" r="170"></circle>
+      <line class="crosshair" x1="30" y1="200" x2="370" y2="200"></line>
+      <line class="crosshair" x1="200" y1="30" x2="200" y2="370"></line>
+      <g id="rings"></g>
+      <text class="compass-label" x="200" y="16">N</text>
+      <text class="compass-label" x="384" y="200">E</text>
+      <text class="compass-label" x="200" y="386">S</text>
+      <text class="compass-label" x="16" y="200">W</text>
+      <g id="sky-layer"></g>
+    </svg>
+  </div>
+
+  <div id="legend">
+    <div class="item"><span class="swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</div>
+    <div class="item"><span class="swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</div>
+    <div class="item"><span class="swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</div>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script>
+    var FALLBACK_LAT = 51.5;
+    var FALLBACK_LON = -0.12;
+    var REFRESH_MS = 30000;
+
+    var CHART_CX = 200;
+    var CHART_CY = 200;
+    var CHART_R = 170;
+
+    var RANGE_SIZE_K = 1800;
+    var MIN_DOT_R = 1.5;
+    var MAX_DOT_R = 9;
+
+    var REGIME_COLOR = { LEO: "#7ee3ff", MEO: "#ffb454", GEO: "#ff6bcb" };
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var skyLayer = document.getElementById("sky-layer");
+    var ringsLayer = document.getElementById("rings");
+    var headlineN = document.querySelector("#headline .n");
+    var locationEl = document.getElementById("location");
+    var statusEl = document.getElementById("status");
+    var tooltipEl = document.getElementById("tooltip");
+
+    var observer = null;
+    var currentMinElevation = 10;
+    var refreshTimer = null;
+    var tooltipNoradId = null;
+
+    function regimeFor(altKm) {
+      if (altKm < 2000) return "LEO";
+      if (altKm <= 35000) return "MEO";
+      return "GEO";
+    }
+
+    function dotRadius(rangeKm) {
+      var r = RANGE_SIZE_K / Math.max(rangeKm, 1);
+      return Math.max(MIN_DOT_R, Math.min(MAX_DOT_R, r));
+    }
+
+    function elevationToRadius(elevationDeg, minElevationDeg) {
+      var clamped = Math.max(minElevationDeg, Math.min(90, elevationDeg));
+      return CHART_R * (90 - clamped) / (90 - minElevationDeg);
+    }
+
+    function polarPoint(azimuthDeg, elevationDeg, minElevationDeg) {
+      var r = elevationToRadius(elevationDeg, minElevationDeg);
+      var rad = (azimuthDeg * Math.PI) / 180;
+      return {
+        x: CHART_CX + r * Math.sin(rad),
+        y: CHART_CY - r * Math.cos(rad),
+      };
+    }
+
+    function updateRings(minElevationDeg) {
+      ringsLayer.innerHTML = "";
+      [30, 60].forEach(function (elevationDeg) {
+        if (elevationDeg <= minElevationDeg) return;
+        var r = elevationToRadius(elevationDeg, minElevationDeg);
+
+        var circle = document.createElementNS(svgNS, "circle");
+        circle.setAttribute("class", "ring");
+        circle.setAttribute("cx", CHART_CX);
+        circle.setAttribute("cy", CHART_CY);
+        circle.setAttribute("r", r);
+        ringsLayer.appendChild(circle);
+
+        var label = document.createElementNS(svgNS, "text");
+        label.setAttribute("class", "ring-label");
+        label.setAttribute("x", CHART_CX);
+        label.setAttribute("y", CHART_CY - r - 3);
+        label.textContent = elevationDeg + "°";
+        ringsLayer.appendChild(label);
+      });
+    }
+
+    function hideTooltip() {
+      tooltipEl.style.display = "none";
+      tooltipNoradId = null;
+      var selected = skyLayer.querySelector(".sat-dot.selected");
+      if (selected) selected.classList.remove("selected");
+    }
+
+    function showTooltip(sat, clientX, clientY, target) {
+      tooltipNoradId = sat.norad_id;
+      tooltipEl.innerHTML =
+        '<div class="name">' + sat.name + "</div>" +
+        '<div class="row"><span class="k">NORAD ID</span> ' + sat.norad_id + "</div>" +
+        '<div class="row"><span class="k">elevation</span> ' + sat.elevation_deg.toFixed(1) + "°</div>" +
+        '<div class="row"><span class="k">azimuth</span> ' + sat.azimuth_deg.toFixed(1) + "°</div>" +
+        '<div class="row"><span class="k">altitude</span> ' + sat.alt_km.toFixed(1) + " km</div>" +
+        '<div class="row"><span class="k">range</span> ' + sat.range_km.toFixed(1) + " km</div>";
+      tooltipEl.style.display = "block";
+
+      var wrapRect = document.getElementById("chart-wrap").getBoundingClientRect();
+      var left = clientX + 12;
+      var top = clientY + 12;
+      if (left + 200 > wrapRect.right) left = clientX - 212;
+      tooltipEl.style.left = left + "px";
+      tooltipEl.style.top = top + "px";
+
+      if (target) target.classList.add("selected");
+    }
+
+    function render(data) {
+      headlineN.textContent = data.count;
+      updateRings(currentMinElevation);
+      skyLayer.innerHTML = "";
+
+      data.satellites.forEach(function (sat) {
+        var point = polarPoint(sat.azimuth_deg, sat.elevation_deg, currentMinElevation);
+        var regime = regimeFor(sat.alt_km);
+
+        var circle = document.createElementNS(svgNS, "circle");
+        circle.setAttribute("class", "sat-dot");
+        circle.setAttribute("cx", point.x);
+        circle.setAttribute("cy", point.y);
+        circle.setAttribute("r", dotRadius(sat.range_km));
+        circle.setAttribute("fill", REGIME_COLOR[regime]);
+        if (sat.norad_id === tooltipNoradId) circle.classList.add("selected");
+
+        circle.addEventListener("mouseenter", function (e) {
+          showTooltip(sat, e.clientX, e.clientY, circle);
+        });
+        circle.addEventListener("mousemove", function (e) {
+          if (tooltipNoradId === sat.norad_id) showTooltip(sat, e.clientX, e.clientY, circle);
+        });
+        circle.addEventListener("mouseleave", hideTooltip);
+        circle.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (tooltipNoradId === sat.norad_id) {
+            hideTooltip();
+          } else {
+            var rect = circle.getBoundingClientRect();
+            showTooltip(sat, rect.left + rect.width / 2, rect.top, circle);
+          }
+        });
+
+        skyLayer.appendChild(circle);
+      });
+    }
+
+    document.addEventListener("click", hideTooltip);
+
+    function setLocationStatus(text) {
+      locationEl.textContent = text;
+    }
+
+    function setUpdateStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function fetchOverhead() {
+      if (!observer) return;
+      try {
+        var url =
+          "/overhead?lat=" + observer.lat + "&lon=" + observer.lon +
+          "&min_elevation_deg=" + currentMinElevation;
+        var res = await fetch(url);
+        if (!res.ok) throw new Error("request failed: " + res.status);
+        var data = await res.json();
+        render(data);
+        setUpdateStatus("last update " + new Date().toLocaleTimeString());
+      } catch (err) {
+        setUpdateStatus("could not reach /overhead — retrying…");
+      }
+    }
+
+    function startPolling() {
+      fetchOverhead();
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(fetchOverhead, REFRESH_MS);
+    }
+
+    function useFallback(reason) {
+      observer = { lat: FALLBACK_LAT, lon: FALLBACK_LON };
+      setLocationStatus(
+        reason + " — showing fallback location (" + FALLBACK_LAT + ", " + FALLBACK_LON + ")"
+      );
+      startPolling();
+    }
+
+    function initLocation() {
+      if (!navigator.geolocation) {
+        useFallback("Geolocation not supported by this browser");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        function (pos) {
+          observer = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+          setLocationStatus(
+            "Using your location (" + observer.lat.toFixed(2) + ", " + observer.lon.toFixed(2) + ")"
+          );
+          startPolling();
+        },
+        function (err) {
+          useFallback("Location unavailable (" + err.message + ")");
+        },
+        { timeout: 8000 }
+      );
+    }
+
+    var elevButtons = document.querySelectorAll(".elev-btn");
+    elevButtons.forEach(function (btn) {
+      if (Number(btn.dataset.elevation) === currentMinElevation) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        currentMinElevation = Number(btn.dataset.elevation);
+        elevButtons.forEach(function (b) {
+          b.classList.toggle("active", b === btn);
+        });
+        hideTooltip();
+        fetchOverhead();
+      });
+    });
+
+    updateRings(currentMinElevation);
+    initLocation();
+  </script>
+</body>
+</html>

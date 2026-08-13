@@ -18,6 +18,7 @@ from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
 DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
 WORLD_JSON_PATH = Path(__file__).parent / "static" / "world.json"
+SKY_HTML_PATH = Path(__file__).parent / "static" / "sky.html"
 
 app = FastAPI(
     title="kessler",
@@ -120,6 +121,24 @@ async def get_world_map() -> FileResponse:
     a third party.
     """
     return FileResponse(WORLD_JSON_PATH, media_type="application/json")
+
+
+@app.get(
+    "/sky",
+    tags=["demo"],
+    summary="Live polar sky chart of what's overhead right now",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def get_sky() -> HTMLResponse:
+    """Serve a self-contained polar sky-chart page.
+
+    Plots every satellite `/overhead` reports for the browser's geolocation
+    (or a London fallback) as a dot on a horizon-to-zenith polar plot,
+    refreshed every 30 seconds. Plain HTML/CSS/JS, no build step and no
+    external dependencies -- a shop window for `/overhead`, not a product UI.
+    """
+    return HTMLResponse(SKY_HTML_PATH.read_text(encoding="utf-8"))
 
 
 @app.get(
