@@ -10,6 +10,8 @@ import os
 import re
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,8 +19,10 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from kessler.catalog_cache import get_cached_catalog
 from kessler.db import (
     DEFAULT_DB_PATH,
+    SatelliteRecord,
     count_satellites,
     get_connection,
     get_satellite,
@@ -29,6 +33,7 @@ from kessler.ingest import run_ingest
 from kessler.overhead import DEFAULT_MIN_ELEVATION_DEG, find_overhead
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
+from kessler.ttl_cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,41 @@ ACCURACY_MD_PATH = Path(__file__).parent.parent / "docs" / "accuracy.md"
 
 AUTO_INGEST_ENV_VAR = "KESSLER_AUTO_INGEST"
 INGEST_REFRESH_INTERVAL_HOURS = 12.0
+
+
+@dataclass(frozen=True)
+class _HealthSnapshot:
+    """Catalog size and newest epoch, as of the last refresh."""
+
+    catalog_size: int
+    newest_epoch: datetime | None
+
+
+# /health must stay cheap even while a heavy /overhead or /conjunctions
+# screen is running, since Fly's health check is what decides whether the
+# machine is considered up. Reading catalog_size/newest_epoch straight from
+# SQLite on every call previously meant every health check could contend
+# with whatever ingest or request work was touching the same database file.
+# Refreshed on every successful ingest (the only time these values actually
+# change) and lazily on first use otherwise (e.g. a restart against an
+# already-populated volume, where startup ingest is skipped entirely) --
+# never recomputed on a schedule, so a warm process never touches the DB for
+# this again.
+_health_snapshot: _HealthSnapshot | None = None
+
+
+def _compute_health_snapshot(conn: sqlite3.Connection) -> _HealthSnapshot:
+    return _HealthSnapshot(catalog_size=count_satellites(conn), newest_epoch=latest_epoch(conn))
+
+
+def _refresh_health_snapshot(db_path: str) -> None:
+    """Recompute the health snapshot from `db_path` and cache it."""
+    global _health_snapshot
+    conn = get_connection(db_path)
+    try:
+        _health_snapshot = _compute_health_snapshot(conn)
+    finally:
+        conn.close()
 
 
 def _auto_ingest_enabled() -> bool:
@@ -61,6 +101,7 @@ async def _ingest_and_log(reason: str) -> None:
         logger.exception("Catalog ingest (%s) failed", reason)
         return
     logger.info("Catalog ingest (%s): %s", reason, summary)
+    await asyncio.to_thread(_refresh_health_snapshot, db_path)
 
 
 async def _startup_ingest_if_empty() -> None:
@@ -128,6 +169,62 @@ CONJUNCTION_DISCLAIMER = (
     "No covariance is used; treat results as a geometric proximity estimate only."
 )
 
+# Screening is CPU-bound and, against a large or heavily-overlapping
+# catalog, can take seconds to minutes -- see kessler/screen.py's time
+# budget. Run it in a small, dedicated worker pool (not the default asyncio
+# executor, which is much larger) so a burst of /conjunctions requests can
+# never spin up enough concurrent screens to exhaust memory on a
+# shared-cpu-1x/1GB machine, and never on the event loop thread itself,
+# since that's what made a single heavy request look like the whole machine
+# had stopped responding (health checks share that same thread).
+SCREENING_MAX_WORKERS = int(os.environ.get("KESSLER_SCREENING_MAX_WORKERS", "2"))
+_screening_executor = ThreadPoolExecutor(
+    max_workers=SCREENING_MAX_WORKERS, thread_name_prefix="kessler-screen"
+)
+
+# Hard wall-clock cap per screen (kessler.screen.screen_catalog stops and
+# reports `truncated: true` instead of hanging once this is exhausted), well
+# under Fly's health-check timeout so a slow screen can never look like a
+# stuck machine even indirectly.
+SCREENING_TIME_BUDGET_SECONDS = float(os.environ.get("KESSLER_SCREENING_TIME_BUDGET_SECONDS", "10"))
+
+# Repeated or concurrent requests for the same target/window are common (the
+# demo and sky-view pages, or several users watching the same object) and
+# screening is expensive enough that serving them from cache instead of
+# re-screening matters. Bounded in both time (a few minutes -- long enough
+# to absorb a burst, short enough that results stay fresh against a catalog
+# that re-ingests every 12h) and size (so cache memory can't grow with
+# request variety).
+SCREENING_CACHE_TTL_SECONDS = float(os.environ.get("KESSLER_SCREENING_CACHE_TTL_SECONDS", "180"))
+SCREENING_CACHE_MAX_ENTRIES = 256
+_screening_cache: TTLCache[tuple[int, int, float, float], dict[str, object]] = TTLCache(
+    ttl_seconds=SCREENING_CACHE_TTL_SECONDS, max_entries=SCREENING_CACHE_MAX_ENTRIES
+)
+
+# /overhead propagates the *entire* catalog on every call (unlike
+# /conjunctions, nothing about a satellite's current position can be pruned
+# ahead of time), which is the same single-shared-vCPU-saturating shape of
+# problem as screening -- it just got there via O(catalog) single
+# propagations instead of O(candidates) full time-grid scans. Same fix, same
+# worker pool (no separate pool: overhead and screening compete for the same
+# bounded CPU budget either way, so one pool caps total concurrent work
+# instead of letting two pools double it).
+OVERHEAD_TIME_BUDGET_SECONDS = float(os.environ.get("KESSLER_OVERHEAD_TIME_BUDGET_SECONDS", "5"))
+
+# The sky view polls every 30s from a location that doesn't change between
+# polls (mod GPS/network-location jitter), and multiple callers are often in
+# roughly the same place -- round lat/lon into the cache key so both share a
+# cache entry instead of missing on noise. `alt_m` is deliberately not part
+# of the key: realistic observer altitudes (0-a few km) change a satellite's
+# look angles by a negligible fraction of a degree, so a cache hit computed
+# for a slightly different altitude is still an accurate answer.
+OVERHEAD_CACHE_TTL_SECONDS = float(os.environ.get("KESSLER_OVERHEAD_CACHE_TTL_SECONDS", "30"))
+OVERHEAD_CACHE_MAX_ENTRIES = 256
+OVERHEAD_LOCATION_ROUNDING_DECIMALS = 2
+_overhead_cache: TTLCache[tuple[float, float, float], dict[str, object]] = TTLCache(
+    ttl_seconds=OVERHEAD_CACHE_TTL_SECONDS, max_entries=OVERHEAD_CACHE_MAX_ENTRIES
+)
+
 
 def _configured_api_keys() -> set[str]:
     """Return the configured API keys, or an empty set if auth is disabled."""
@@ -183,17 +280,31 @@ async def health(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, object
 
     `catalog_size` and `newest_tle_epoch_age_hours` make deployment problems
     (empty catalog, stalled ingestion) visible without digging into logs.
+
+    Served from the cached `_health_snapshot` (refreshed on every ingest)
+    rather than querying the catalog directly, so a health check never
+    contends with whatever ingest or request work is touching the database
+    -- see the note above `_health_snapshot`. Falls back to a direct query
+    only when nothing has warmed the cache yet (e.g. right after a restart
+    against an already-populated volume, where startup ingest is skipped).
     """
-    newest_epoch = latest_epoch(conn)
+    global _health_snapshot
+    snapshot = _health_snapshot
+    if snapshot is None:
+        snapshot = _compute_health_snapshot(conn)
+        _health_snapshot = snapshot
+
     newest_epoch_age_hours = (
-        round((datetime.now(UTC) - newest_epoch).total_seconds() / 3600, 3)
-        if newest_epoch is not None
+        round((datetime.now(UTC) - snapshot.newest_epoch).total_seconds() / 3600, 3)
+        if snapshot.newest_epoch is not None
         else None
     )
     return {
         "status": "ok",
-        "catalog_size": count_satellites(conn),
-        "newest_tle_epoch_utc": newest_epoch.isoformat() if newest_epoch is not None else None,
+        "catalog_size": snapshot.catalog_size,
+        "newest_tle_epoch_utc": (
+            snapshot.newest_epoch.isoformat() if snapshot.newest_epoch is not None else None
+        ),
         "newest_tle_epoch_age_hours": newest_epoch_age_hours,
     }
 
@@ -478,6 +589,7 @@ async def get_position(
                         "window_end_utc": "2026-08-12T12:00:00+00:00",
                         "threshold_km": 10.0,
                         "min_separation_km": 1.0,
+                        "truncated": False,
                         "conjunctions": [
                             {
                                 "other_norad_id": 43205,
@@ -525,17 +637,67 @@ async def get_conjunctions(
 
     Reports geometric miss distance only, from public TLEs via SGP4. This is
     not a collision probability and does not account for TLE covariance.
+
+    The actual screen runs off the event loop in a worker thread, under a
+    hard time budget (`truncated: true` in the response if it was hit
+    before the full catalog could be checked), and results are cached for a
+    few minutes per (norad_id, hours, threshold_km, min_separation_km) so
+    repeated or concurrent requests for the same target are served without
+    re-screening. See `kessler/screen.py` and `kessler/catalog_cache.py`.
     """
     target = get_satellite(conn, norad_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"Unknown norad_id: {norad_id}")
 
+    cache_key = (norad_id, hours, threshold_km, min_separation_km)
+    cached = _screening_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    payload = await loop.run_in_executor(
+        _screening_executor,
+        _screen_target,
+        conn,
+        target,
+        hours,
+        threshold_km,
+        min_separation_km,
+    )
+
+    _screening_cache.set(cache_key, payload)
+    return payload
+
+
+def _screen_target(
+    conn: sqlite3.Connection,
+    target: SatelliteRecord,
+    hours: int,
+    threshold_km: float,
+    min_separation_km: float,
+) -> dict[str, object]:
+    """Blocking worker: read the catalog, screen it, and build the response.
+
+    Runs on a worker thread (see `get_conjunctions`) so a heavy screen never
+    runs on the event loop -- which is what previously made a single slow
+    `/conjunctions` request block health checks and every other in-flight
+    request, making the whole machine look unresponsive.
+    """
     window_start = datetime.now(UTC)
     window_end = window_start + timedelta(hours=hours)
 
     catalog = list_satellites(conn)
-    results = screen_catalog(
-        target, catalog, window_start, window_end, threshold_km, min_separation_km
+    catalog_cache = get_cached_catalog(catalog)
+
+    results, truncated = screen_catalog(
+        target,
+        catalog,
+        window_start,
+        window_end,
+        threshold_km,
+        min_separation_km,
+        catalog_cache=catalog_cache,
+        time_budget_seconds=SCREENING_TIME_BUDGET_SECONDS,
     )
 
     return {
@@ -546,6 +708,7 @@ async def get_conjunctions(
         "window_end_utc": window_end.isoformat(),
         "threshold_km": threshold_km,
         "min_separation_km": min_separation_km,
+        "truncated": truncated,
         "conjunctions": [
             {
                 "other_norad_id": r.other_norad_id,
@@ -573,6 +736,7 @@ async def get_conjunctions(
                         "observer": {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0},
                         "min_elevation_deg": 10.0,
                         "count": 1,
+                        "truncated": False,
                         "satellites": [
                             {
                                 "norad_id": 25544,
@@ -612,18 +776,84 @@ async def get_overhead(
     distance from the observer before the full topocentric conversion (see
     `kessler.overhead`), and returns satellites at or above
     `min_elevation_deg`, sorted by elevation descending.
+
+    Like `/conjunctions`, the actual computation runs off the event loop in
+    a worker thread, under a hard time budget (`truncated: true` in the
+    response if it was hit before the full catalog could be checked), and
+    is cached for 30s per (rounded lat, rounded lon, min_elevation_deg) so
+    repeated or concurrent requests for the same location don't
+    re-propagate the whole catalog. See `kessler/overhead.py` and
+    `kessler/catalog_cache.py`.
+    """
+    cache_key = (
+        round(lat, OVERHEAD_LOCATION_ROUNDING_DECIMALS),
+        round(lon, OVERHEAD_LOCATION_ROUNDING_DECIMALS),
+        min_elevation_deg,
+    )
+    cached = _overhead_cache.get(cache_key)
+    if cached is None:
+        loop = asyncio.get_running_loop()
+        cached = await loop.run_in_executor(
+            _screening_executor,
+            _compute_overhead,
+            conn,
+            lat,
+            lon,
+            alt_m / 1000.0,
+            min_elevation_deg,
+        )
+        _overhead_cache.set(cache_key, cached)
+
+    return {
+        "at": cached["at"],
+        "observer": {"lat": lat, "lon": lon, "alt_m": alt_m},
+        "min_elevation_deg": cached["min_elevation_deg"],
+        "count": cached["count"],
+        "truncated": cached["truncated"],
+        "satellites": cached["satellites"],
+    }
+
+
+def _compute_overhead(
+    conn: sqlite3.Connection,
+    lat: float,
+    lon: float,
+    alt_km: float,
+    min_elevation_deg: float,
+) -> dict[str, object]:
+    """Blocking worker: propagate the catalog and find overhead satellites.
+
+    Runs on a worker thread (see `get_overhead`), same as `_screen_target`,
+    so a large or slow-to-propagate catalog never runs on the event loop --
+    that's what previously let a single /overhead request saturate the
+    machine's one shared vCPU and starve health checks for long enough that
+    Fly marked it unhealthy.
+
+    Returns only the computed fields, not `observer` -- that's echoed back
+    from the actual request's `lat`/`lon`/`alt_m` in `get_overhead`, not
+    from whichever request happened to populate this cache entry.
     """
     at = datetime.now(UTC)
     catalog = list_satellites(conn)
-    satellites = find_overhead(
-        catalog, lat, lon, alt_m / 1000.0, at, min_elevation_deg, STALE_THRESHOLD_HOURS
+    catalog_cache = get_cached_catalog(catalog)
+
+    satellites, truncated = find_overhead(
+        catalog,
+        lat,
+        lon,
+        alt_km,
+        at,
+        min_elevation_deg,
+        STALE_THRESHOLD_HOURS,
+        catalog_cache=catalog_cache,
+        time_budget_seconds=OVERHEAD_TIME_BUDGET_SECONDS,
     )
 
     return {
         "at": at.isoformat(),
-        "observer": {"lat": lat, "lon": lon, "alt_m": alt_m},
         "min_elevation_deg": min_elevation_deg,
         "count": len(satellites),
+        "truncated": truncated,
         "satellites": [
             {
                 "norad_id": s.norad_id,

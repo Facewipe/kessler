@@ -117,6 +117,14 @@ curl "http://localhost:8000/health"
 catalog) make it easy to tell a deployment is up but hasn't ingested data yet
 versus genuinely unhealthy.
 
+`/health` is served from an in-process snapshot refreshed on every ingest
+(and computed once lazily if nothing has warmed it yet, e.g. right after a
+restart against an already-populated volume), never by querying the catalog
+directly -- so a health check can't be delayed by whatever ingest or
+request work happens to be touching the database at the same moment. This
+matters because Fly's health check is what decides whether the machine is
+considered up at all.
+
 ### Get a satellite's current position
 
 ```bash
@@ -186,6 +194,7 @@ Example response (illustrative, with a fuller catalog):
   "window_end_utc": "2026-08-12T12:00:00+00:00",
   "threshold_km": 10.0,
   "min_separation_km": 1.0,
+  "truncated": false,
   "conjunctions": [
     {
       "other_norad_id": 43205,
@@ -211,6 +220,21 @@ collision probability.
 Returns `404` for an unknown `norad_id` and `422` for `hours`,
 `threshold_km`, or `min_separation_km` outside their allowed ranges.
 
+Screening is the most expensive endpoint in the API (worst case: every
+catalog object survives the coarse filter and needs full propagation), so it
+runs off the event loop in a small worker thread pool
+(`KESSLER_SCREENING_MAX_WORKERS`, default 2 -- bounded so a burst of
+requests can't exhaust memory), under a hard wall-clock budget
+(`KESSLER_SCREENING_TIME_BUDGET_SECONDS`, default 10s) --
+if the budget is exhausted, the response reports whatever was found so far
+with `"truncated": true` rather than hanging. Per-catalog-object `Satrec`
+parsing and orbit-range computation is cached in-process and only rebuilt
+when the catalog actually changes (see `kessler/catalog_cache.py`), and
+whole responses are cached for a few minutes per (norad_id, hours,
+threshold_km, min_separation_km) (`KESSLER_SCREENING_CACHE_TTL_SECONDS`,
+default 180s) so repeated or concurrent requests for the same target don't
+re-screen from scratch.
+
 ### List satellites currently overhead
 
 ```bash
@@ -230,6 +254,7 @@ Example response:
   "observer": {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0},
   "min_elevation_deg": 10.0,
   "count": 1,
+  "truncated": false,
   "satellites": [
     {
       "norad_id": 25544,
@@ -256,6 +281,21 @@ north. Results are sorted by elevation, descending.
 
 Returns `422` for `lat`, `lon`, or `min_elevation_deg` outside their allowed
 ranges.
+
+Unlike `/conjunctions`, nothing about a satellite's *current* position can
+be pruned ahead of time, so every catalog object is propagated on every
+call -- against a large catalog that's still expensive enough to saturate a
+single shared vCPU. It gets the same treatment as screening: computation
+runs off the event loop in the same worker thread pool
+(`KESSLER_SCREENING_MAX_WORKERS`), under a hard wall-clock budget
+(`KESSLER_OVERHEAD_TIME_BUDGET_SECONDS`, default 5s -- `"truncated": true`
+if hit), reuses the cached per-catalog-object `Satrec` from
+`kessler/catalog_cache.py`, and caches whole responses for 30s
+(`KESSLER_OVERHEAD_CACHE_TTL_SECONDS`) per (rounded lat, rounded lon,
+`min_elevation_deg`) -- rounded to 2 decimal places, so the sky view's own
+repeated 30s polls from one location share a cache entry despite GPS/network
+location jitter. `observer` always echoes back the exact `lat`/`lon`/`alt_m`
+from the current request, even on a cache hit.
 
 ## Authentication
 

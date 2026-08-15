@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 
 import pytest
@@ -10,6 +11,7 @@ from kessler.db import SatelliteRecord
 from kessler.propagate import epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import (
     EPOCH_AGE_DRIFT_KM_PER_HOUR,
+    CachedSatellite,
     OrbitRange,
     colocation_bound_km,
     find_close_approaches,
@@ -245,9 +247,10 @@ def test_screen_catalog_excludes_colocated_pair() -> None:
     )
     start, end = _WINDOW_START, _WINDOW_END
 
-    results = screen_catalog(target, [docked], start, end, threshold_km=100.0)
+    results, truncated = screen_catalog(target, [docked], start, end, threshold_km=100.0)
 
     assert results == []
+    assert truncated is False
 
 
 def test_screen_catalog_excludes_drifted_docked_pair_given_enough_margin() -> None:
@@ -267,11 +270,12 @@ def test_screen_catalog_excludes_drifted_docked_pair_given_enough_margin() -> No
     )
     start, end = _EPOCH, _EPOCH + timedelta(minutes=10)
 
-    results = screen_catalog(
+    results, truncated = screen_catalog(
         target, [drifting], start, end, threshold_km=100.0, min_separation_km=50.0
     )
 
     assert results == []
+    assert truncated is False
 
 
 def test_screen_catalog_prunes_non_overlapping_orbit() -> None:
@@ -286,11 +290,12 @@ def test_screen_catalog_prunes_non_overlapping_orbit() -> None:
     )
     start, end = _WINDOW_START, _WINDOW_END
 
-    results = screen_catalog(target, [close, far], start, end, threshold_km=100.0)
+    results, truncated = screen_catalog(target, [close, far], start, end, threshold_km=100.0)
 
     assert [r.other_norad_id for r in results] == [CLOSE_NORAD_ID]
     assert results[0].miss_distance_km < 100.0
     assert results[0].target_epoch_age_hours == pytest.approx(0.75, abs=0.01)
+    assert truncated is False
 
 
 def test_screen_catalog_sorts_results_by_miss_distance() -> None:
@@ -306,7 +311,7 @@ def test_screen_catalog_sorts_results_by_miss_distance() -> None:
     start, end = _WINDOW_START, _WINDOW_END
 
     # Deliberately catalog the farther one first to prove sorting, not insertion order.
-    results = screen_catalog(target, [close2, close], start, end, threshold_km=100.0)
+    results, _truncated = screen_catalog(target, [close2, close], start, end, threshold_km=100.0)
 
     assert [r.other_norad_id for r in results] == [CLOSE_NORAD_ID, CLOSE2_NORAD_ID]
     assert results[0].miss_distance_km <= results[1].miss_distance_km
@@ -327,6 +332,86 @@ def test_screen_catalog_synthetic_fleet_stays_fast() -> None:
     start = _EPOCH
     end = _EPOCH + timedelta(hours=72)
 
-    results = screen_catalog(target, catalog, start, end, threshold_km=10.0)
+    results, truncated = screen_catalog(target, catalog, start, end, threshold_km=10.0)
 
     assert results == []
+    assert truncated is False
+
+
+def test_screen_catalog_uses_catalog_cache_without_reparsing(monkeypatch) -> None:
+    """When `catalog_cache` covers every record, `screen_catalog` must not
+    re-parse TLEs or re-derive orbit ranges -- that per-request re-parsing
+    of the whole catalog was a large, entirely avoidable share of
+    `/conjunctions`'s cost (see `kessler.catalog_cache`)."""
+    target = SatelliteRecord(
+        norad_id=TEST_NORAD_ID, name="TARGET", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
+    )
+    close = SatelliteRecord(
+        norad_id=CLOSE_NORAD_ID, name="CLOSE", line1=CLOSE_TLE_LINE1, line2=CLOSE_TLE_LINE2
+    )
+    start, end = _WINDOW_START, _WINDOW_END
+
+    target_satrec = satrec_from_tle(target.line1, target.line2)
+    close_satrec = satrec_from_tle(close.line1, close.line2)
+    catalog_cache = {
+        target.norad_id: CachedSatellite(
+            record=target, satrec=target_satrec, orbit_range=orbit_range(target_satrec)
+        ),
+        close.norad_id: CachedSatellite(
+            record=close, satrec=close_satrec, orbit_range=orbit_range(close_satrec)
+        ),
+    }
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("satrec_from_tle must not be called when catalog_cache is complete")
+
+    monkeypatch.setattr("kessler.screen.satrec_from_tle", _fail_if_called)
+
+    results, truncated = screen_catalog(
+        target, [close], start, end, threshold_km=100.0, catalog_cache=catalog_cache
+    )
+
+    assert [r.other_norad_id for r in results] == [CLOSE_NORAD_ID]
+    assert truncated is False
+
+
+@pytest.mark.slow
+def test_screen_catalog_time_budget_bounds_wall_clock_time() -> None:
+    """The production failure mode this is fixing: a catalog with many
+    entries sharing the target's orbit is not pruned by the coarse filter
+    at all, so every one of them is a genuine coarse+fine propagation
+    candidate over the full window -- without a hard budget this runs for
+    as long as the catalog demands, which is exactly what made
+    `/conjunctions` hang. With a budget, wall-clock time must stay bounded
+    and the response must come back flagged as truncated.
+    """
+    target = SatelliteRecord(
+        norad_id=TEST_NORAD_ID, name="TARGET", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
+    )
+    # Same orbit as the target -- entirely unpruned by the coarse
+    # orbit-overlap filter, so every entry needs full propagation.
+    catalog = [
+        SatelliteRecord(
+            norad_id=CLOSE_NORAD_ID + 1 + i,
+            name=f"OVERLAP-{i}",
+            line1=CLOSE_TLE_LINE1,
+            line2=CLOSE_TLE_LINE2,
+        )
+        for i in range(500)
+    ]
+    start = _EPOCH
+    end = _EPOCH + timedelta(hours=72)
+    budget_seconds = 1.0
+
+    started = time.monotonic()
+    results, truncated = screen_catalog(
+        target, catalog, start, end, threshold_km=10.0, time_budget_seconds=budget_seconds
+    )
+    elapsed = time.monotonic() - started
+
+    # A generous margin over the budget: the deadline is checked between
+    # coarse-grid samples, not preemptively, so some small overshoot is
+    # expected -- but nowhere near the ~19s an untruncated run over this
+    # catalog would take (measured empirically at ~38ms/pair).
+    assert elapsed < budget_seconds + 3.0
+    assert truncated is True

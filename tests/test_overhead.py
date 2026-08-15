@@ -16,6 +16,7 @@ from kessler.overhead import (
     topocentric,
 )
 from kessler.propagate import epoch_datetime, geodetic_to_ecef, position_at, satrec_from_tle
+from kessler.screen import CachedSatellite, orbit_range
 
 from .conftest import TEST_NORAD_ID, TEST_SATELLITE_NAME, TEST_TLE_LINE1, TEST_TLE_LINE2
 from .test_screen import CLOSE_NORAD_ID, CLOSE_TLE_LINE1, CLOSE_TLE_LINE2
@@ -120,7 +121,7 @@ def test_find_overhead_includes_satellite_directly_overhead() -> None:
         line2=TEST_TLE_LINE2,
     )
 
-    results = find_overhead(
+    results, truncated = find_overhead(
         [target],
         position.lat_deg,
         position.lon_deg,
@@ -138,6 +139,7 @@ def test_find_overhead_includes_satellite_directly_overhead() -> None:
     assert result.range_km == pytest.approx(position.alt_km, abs=1e-3)
     assert result.epoch_age_hours == pytest.approx(0.0, abs=1e-3)
     assert result.stale is False
+    assert truncated is False
 
 
 def test_find_overhead_excludes_satellite_below_the_horizon() -> None:
@@ -153,7 +155,7 @@ def test_find_overhead_excludes_satellite_below_the_horizon() -> None:
     antipodal_lat = -position.lat_deg
     antipodal_lon = position.lon_deg + 180.0
 
-    results = find_overhead(
+    results, truncated = find_overhead(
         [target],
         antipodal_lat,
         antipodal_lon,
@@ -164,6 +166,7 @@ def test_find_overhead_excludes_satellite_below_the_horizon() -> None:
     )
 
     assert results == []
+    assert truncated is False
 
 
 def test_find_overhead_respects_min_elevation_cutoff() -> None:
@@ -181,7 +184,7 @@ def test_find_overhead_respects_min_elevation_cutoff() -> None:
     observer_ecef = geodetic_to_ecef(observer_lat, position.lon_deg, 0.0)
     actual = topocentric(observer_lat, position.lon_deg, observer_ecef, position.ecef_km)
 
-    included = find_overhead(
+    included, _included_truncated = find_overhead(
         [target],
         observer_lat,
         position.lon_deg,
@@ -190,7 +193,7 @@ def test_find_overhead_respects_min_elevation_cutoff() -> None:
         min_elevation_deg=actual.elevation_deg - 1.0,
         stale_threshold_hours=72.0,
     )
-    excluded = find_overhead(
+    excluded, _excluded_truncated = find_overhead(
         [target],
         observer_lat,
         position.lon_deg,
@@ -220,7 +223,7 @@ def test_find_overhead_sorts_by_elevation_descending() -> None:
     )
 
     # Deliberately catalog the lower one first to prove sorting, not insertion order.
-    combined = find_overhead(
+    combined, _truncated = find_overhead(
         [off_to_the_side, directly_overhead],
         position.lat_deg,
         position.lon_deg,
@@ -250,7 +253,7 @@ def test_find_overhead_synthetic_16k_catalog_stays_fast() -> None:
     at = _EPOCH
 
     start = time.perf_counter()
-    results = find_overhead(
+    results, truncated = find_overhead(
         catalog, 51.5074, -0.1278, 0.0, at, min_elevation_deg=10.0, stale_threshold_hours=72.0
     )
     elapsed = time.perf_counter() - start
@@ -260,3 +263,64 @@ def test_find_overhead_synthetic_16k_catalog_stays_fast() -> None:
     # are either all visible or all pruned together -- either is fine here,
     # this test is about speed, not the visibility outcome.
     assert len(results) in (0, 16000)
+    assert truncated is False
+
+
+def test_find_overhead_uses_catalog_cache_without_reparsing(monkeypatch) -> None:
+    """When `catalog_cache` covers every record, `find_overhead` must not
+    re-parse TLEs -- that per-request re-parsing of the whole catalog was a
+    large, entirely avoidable share of `/overhead`'s cost."""
+    target = SatelliteRecord(
+        norad_id=TEST_NORAD_ID,
+        name=TEST_SATELLITE_NAME,
+        line1=TEST_TLE_LINE1,
+        line2=TEST_TLE_LINE2,
+    )
+    position = position_at(_SATREC, _EPOCH)
+    catalog_cache = {
+        target.norad_id: CachedSatellite(
+            record=target, satrec=_SATREC, orbit_range=orbit_range(_SATREC)
+        ),
+    }
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("satrec_from_tle must not be called when catalog_cache is complete")
+
+    monkeypatch.setattr("kessler.overhead.satrec_from_tle", _fail_if_called)
+
+    results, truncated = find_overhead(
+        [target],
+        position.lat_deg,
+        position.lon_deg,
+        0.0,
+        _EPOCH,
+        min_elevation_deg=10.0,
+        stale_threshold_hours=72.0,
+        catalog_cache=catalog_cache,
+    )
+
+    assert len(results) == 1
+    assert truncated is False
+
+
+def test_find_overhead_time_budget_truncates_instead_of_hanging() -> None:
+    catalog = [
+        SatelliteRecord(
+            norad_id=400000 + i, name=f"SAT-{i}", line1=TEST_TLE_LINE1, line2=TEST_TLE_LINE2
+        )
+        for i in range(1000)
+    ]
+
+    results, truncated = find_overhead(
+        catalog,
+        51.5074,
+        -0.1278,
+        0.0,
+        _EPOCH,
+        min_elevation_deg=10.0,
+        stale_threshold_hours=72.0,
+        time_budget_seconds=0.0,
+    )
+
+    assert results == []
+    assert truncated is True
