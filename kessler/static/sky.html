@@ -4,16 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kessler &mdash; sky view</title>
+<link rel="stylesheet" href="/static/shared.css">
 <style>
   :root {
-    --bg: #090d16;
-    --panel: #0c1524;
-    --border: #1c2b42;
     --ring: #23334c;
     --ring-label: #4a6084;
-    --text: #cfe0f5;
-    --text-dim: #7d93b8;
-    --accent: #7ee3ff;
     --leo: #7ee3ff;
     --meo: #ffb454;
     --geo: #ff6bcb;
@@ -33,18 +28,25 @@
   body {
     display: flex;
     flex-direction: column;
+    min-height: 100%;
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     padding: 1.5rem 1rem 3rem;
   }
 
-  header {
+  .page-intro {
     width: 100%;
     max-width: 480px;
     text-align: center;
     margin-bottom: 0.25rem;
   }
 
-  header h1 {
+  .page-intro h1 {
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
@@ -255,45 +257,76 @@
   #tooltip .tooltip-close:focus-visible {
     color: var(--text);
   }
+
+  #tooltip .tooltip-link {
+    display: block;
+    margin-top: 0.4rem;
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  #tooltip .tooltip-link:hover,
+  #tooltip .tooltip-link:focus-visible {
+    text-decoration: underline;
+  }
 </style>
 </head>
 <body>
-  <header>
-    <h1>kessler &mdash; sky view</h1>
-    <div id="location">Locating&hellip;</div>
+  <header class="kessler-header">
+    <a class="wordmark" href="/">kessler</a>
+    <nav class="kessler-nav">
+      <a href="/sky" class="active">Sky view</a>
+      <a href="/demo">World map</a>
+      <a href="/docs">API</a>
+    </nav>
   </header>
 
-  <div id="headline"><span class="n">&mdash;</span> satellites above you right now</div>
-  <div id="status">&nbsp;</div>
+  <main>
+    <div class="page-intro">
+      <h1>kessler &mdash; sky view</h1>
+      <div id="location">Locating&hellip;</div>
+    </div>
 
-  <div id="controls">
-    <span class="label">min elevation</span>
-    <button class="elev-btn" data-elevation="10">10&deg;</button>
-    <button class="elev-btn" data-elevation="30">30&deg;</button>
-    <button class="elev-btn" data-elevation="60">60&deg;</button>
-  </div>
+    <div id="headline"><span class="n">&mdash;</span> satellites above you right now</div>
+    <div id="status">&nbsp;</div>
 
-  <div id="chart-wrap">
-    <svg id="chart" viewBox="0 0 400 400">
-      <circle class="rim" cx="200" cy="200" r="170"></circle>
-      <line class="crosshair" x1="30" y1="200" x2="370" y2="200"></line>
-      <line class="crosshair" x1="200" y1="30" x2="200" y2="370"></line>
-      <g id="rings"></g>
-      <text class="compass-label" x="200" y="16">N</text>
-      <text class="compass-label" x="384" y="200">E</text>
-      <text class="compass-label" x="200" y="386">S</text>
-      <text class="compass-label" x="16" y="200">W</text>
-      <g id="sky-layer"></g>
-    </svg>
-  </div>
+    <div id="controls">
+      <span class="label">min elevation</span>
+      <button class="elev-btn" data-elevation="10">10&deg;</button>
+      <button class="elev-btn" data-elevation="30">30&deg;</button>
+      <button class="elev-btn" data-elevation="60">60&deg;</button>
+    </div>
 
-  <div id="legend">
-    <div class="item"><span class="swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</div>
-    <div class="item"><span class="swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</div>
-    <div class="item"><span class="swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</div>
-  </div>
+    <div id="chart-wrap">
+      <svg id="chart" viewBox="0 0 400 400">
+        <circle class="rim" cx="200" cy="200" r="170"></circle>
+        <line class="crosshair" x1="30" y1="200" x2="370" y2="200"></line>
+        <line class="crosshair" x1="200" y1="30" x2="200" y2="370"></line>
+        <g id="rings"></g>
+        <text class="compass-label" x="200" y="16">N</text>
+        <text class="compass-label" x="384" y="200">E</text>
+        <text class="compass-label" x="200" y="386">S</text>
+        <text class="compass-label" x="16" y="200">W</text>
+        <g id="sky-layer"></g>
+      </svg>
+    </div>
 
-  <div id="tooltip"></div>
+    <div id="legend">
+      <div class="item"><span class="swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</div>
+      <div class="item"><span class="swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</div>
+      <div class="item"><span class="swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</div>
+    </div>
+
+    <div id="tooltip"></div>
+  </main>
+
+  <footer class="kessler-footer">
+    <span>Data: <a href="https://celestrak.org/" target="_blank" rel="noopener">Celestrak</a></span>
+    <span class="sep">&middot;</span>
+    <span>Geometric miss distance only, not a collision probability &mdash; <a href="/docs/accuracy">accuracy notes</a></span>
+    <span class="sep">&middot;</span>
+    <a href="/docs">API docs</a>
+  </footer>
 
   <script>
     var FALLBACK_LAT = 51.5;
@@ -448,7 +481,8 @@
         '<div class="row"><span class="k">elevation</span> ' + sat.elevation_deg.toFixed(1) + "°</div>" +
         '<div class="row"><span class="k">azimuth</span> ' + sat.azimuth_deg.toFixed(1) + "°</div>" +
         '<div class="row"><span class="k">altitude</span> ' + sat.alt_km.toFixed(1) + " km</div>" +
-        '<div class="row"><span class="k">range</span> ' + sat.range_km.toFixed(1) + " km</div>";
+        '<div class="row"><span class="k">range</span> ' + sat.range_km.toFixed(1) + " km</div>" +
+        '<a class="tooltip-link" href="/conjunctions/' + sat.norad_id + '" target="_blank" rel="noopener">See conjunctions &rarr;</a>';
       tooltipEl.style.display = "block";
 
       var pad = 10;

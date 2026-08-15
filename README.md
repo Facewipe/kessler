@@ -65,6 +65,17 @@ never make a network call).
 Interactive OpenAPI docs (with request/response examples) are served at
 `/docs` once the app is running.
 
+### Landing page
+
+`GET /` serves a one-screen landing page explaining what kessler is, three
+live numbers pulled from the API (catalog size, objects currently overhead
+over London, newest TLE age), and links into the sky view, world map, and
+API docs. `/`, `/sky`, and `/demo` share a header (with the current page
+marked active) and a footer (data source, the accuracy disclaimer linking to
+`GET /docs/accuracy` — a rendered version of
+[`docs/accuracy.md`](docs/accuracy.md) — and a link to `/docs`), defined
+once in `kessler/static/shared.css`.
+
 ### Live demo map
 
 `GET /demo` serves a self-contained HTML page (plain HTML/CSS/JS, no build
