@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+import kessler.api as kessler_api
 from kessler.db import SatelliteRecord, upsert_satellite
 from kessler.propagate import position_at, satrec_from_tle
 
@@ -22,6 +23,7 @@ def test_overhead_response_shape_and_defaults(client: TestClient) -> None:
     body = response.json()
     assert body["observer"] == {"lat": 0.0, "lon": 0.0, "alt_m": 0.0}
     assert body["min_elevation_deg"] == 10.0
+    assert body["truncated"] is False
     assert body["count"] == len(body["satellites"])
     for entry in body["satellites"]:
         assert entry.keys() == {
@@ -108,3 +110,88 @@ def test_overhead_excludes_satellite_below_min_elevation(client: TestClient) -> 
     assert response.status_code == 200
     other_ids = {s["norad_id"] for s in response.json()["satellites"]}
     assert TEST_NORAD_ID not in other_ids
+
+
+def test_overhead_repeated_request_is_served_from_cache(client: TestClient, monkeypatch) -> None:
+    """A second request for the same (rounded lat, rounded lon,
+    min_elevation_deg) must be served from cache, not re-propagated --
+    the whole point of caching this expensive endpoint."""
+    call_count = 0
+    original_find_overhead = kessler_api.find_overhead
+
+    def _counting_find_overhead(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_find_overhead(*args, **kwargs)
+
+    monkeypatch.setattr(kessler_api, "find_overhead", _counting_find_overhead)
+
+    params = {"lat": 51.5074, "lon": -0.1278, "min_elevation_deg": 10}
+    first = client.get("/overhead", params=params)
+    second = client.get("/overhead", params=params)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert call_count == 1
+    # The computed part (everything but the per-request observer echo) must
+    # be identical between the two responses -- it came from the same cache
+    # entry.
+    first_body, second_body = first.json(), second.json()
+    del first_body["observer"]
+    del second_body["observer"]
+    assert first_body == second_body
+
+
+def test_overhead_cache_key_rounds_nearby_locations_together(
+    client: TestClient, monkeypatch
+) -> None:
+    """Two requests whose lat/lon differ only past the rounding precision
+    must share a cache entry (the sky view's own repeated polls will jitter
+    by that much), while each response still echoes its own exact
+    lat/lon/alt_m in `observer`, not whichever request happened to populate
+    the cache entry."""
+    call_count = 0
+    original_find_overhead = kessler_api.find_overhead
+
+    def _counting_find_overhead(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_find_overhead(*args, **kwargs)
+
+    monkeypatch.setattr(kessler_api, "find_overhead", _counting_find_overhead)
+
+    first = client.get(
+        "/overhead", params={"lat": 51.50740, "lon": -0.12780, "min_elevation_deg": 10}
+    )
+    second = client.get(
+        "/overhead", params={"lat": 51.50744, "lon": -0.12784, "min_elevation_deg": 10}
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert call_count == 1
+    assert first.json()["observer"] == {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0}
+    assert second.json()["observer"] == {"lat": 51.50744, "lon": -0.12784, "alt_m": 0.0}
+
+
+def test_overhead_different_min_elevation_deg_are_not_conflated_by_cache(
+    client: TestClient,
+) -> None:
+    low = client.get("/overhead", params={"lat": 51.5074, "lon": -0.1278, "min_elevation_deg": 0})
+    high = client.get("/overhead", params={"lat": 51.5074, "lon": -0.1278, "min_elevation_deg": 80})
+
+    assert low.status_code == 200
+    assert high.status_code == 200
+    assert low.json()["min_elevation_deg"] != high.json()["min_elevation_deg"]
+
+
+def test_overhead_truncated_when_time_budget_exhausted(client: TestClient, monkeypatch) -> None:
+    """An exhausted time budget must surface as `truncated: true`, not a
+    hang -- exercised end-to-end through the API rather than just at the
+    `find_overhead` unit level."""
+    monkeypatch.setattr(kessler_api, "OVERHEAD_TIME_BUDGET_SECONDS", 0.0)
+
+    response = client.get("/overhead", params={"lat": 51.5074, "lon": -0.1278})
+
+    assert response.status_code == 200
+    assert response.json()["truncated"] is True

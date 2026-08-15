@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from pathlib import Path
 
+import kessler.api as kessler_api
 from kessler.api import (
     AUTO_INGEST_ENV_VAR,
     _auto_ingest_enabled,
@@ -82,6 +83,8 @@ def test_ingest_and_log_logs_summary(monkeypatch, tmp_path, caplog) -> None:
 
     assert "Catalog ingest (test)" in caplog.text
     assert "inserted: 10" in caplog.text
+    assert kessler_api._health_snapshot is not None
+    assert kessler_api._health_snapshot.catalog_size == 10
 
 
 def test_ingest_and_log_swallows_errors(monkeypatch, tmp_path, caplog) -> None:
@@ -97,6 +100,7 @@ def test_ingest_and_log_swallows_errors(monkeypatch, tmp_path, caplog) -> None:
         asyncio.run(_ingest_and_log("test"))  # must not raise
 
     assert "Catalog ingest (test) failed" in caplog.text
+    assert kessler_api._health_snapshot is None
 
 
 def test_periodic_ingest_refresh_calls_ingest_and_log(monkeypatch) -> None:

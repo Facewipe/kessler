@@ -19,9 +19,13 @@ For each catalog satellite:
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import NamedTuple
+
+from sgp4.api import Satrec
 
 from kessler.db import SatelliteRecord
 from kessler.propagate import (
@@ -31,6 +35,7 @@ from kessler.propagate import (
     position_at,
     satrec_from_tle,
 )
+from kessler.screen import CachedSatellite
 
 _EARTH_RADIUS_KM = 6378.137
 
@@ -65,6 +70,14 @@ class OverheadSatellite:
     alt_km: float
     epoch_age_hours: float
     stale: bool
+
+
+class OverheadOutcome(NamedTuple):
+    """Result of `find_overhead`: the satellites found, and whether the time
+    budget was exhausted before the full catalog could be checked."""
+
+    satellites: list[OverheadSatellite]
+    truncated: bool
 
 
 def max_ground_range_km(
@@ -136,6 +149,23 @@ def topocentric(
     return Topocentric(elevation_deg=elevation_deg, azimuth_deg=azimuth_deg, range_km=range_km)
 
 
+def _resolve_satrec(
+    record: SatelliteRecord, catalog_cache: Mapping[int, CachedSatellite] | None
+) -> Satrec:
+    """Return `record`'s parsed `Satrec`, from `catalog_cache` if present.
+
+    Falls back to parsing it inline when the cache is `None` (plain
+    unit-test usage) or doesn't have this record -- correctness never
+    depends on the cache being warm, only performance does. Mirrors
+    `kessler.screen._resolve`.
+    """
+    if catalog_cache is not None:
+        cached = catalog_cache.get(record.norad_id)
+        if cached is not None:
+            return cached.satrec
+    return satrec_from_tle(record.line1, record.line2)
+
+
 def find_overhead(
     catalog: Iterable[SatelliteRecord],
     observer_lat_deg: float,
@@ -144,17 +174,36 @@ def find_overhead(
     at: datetime,
     min_elevation_deg: float,
     stale_threshold_hours: float,
-) -> list[OverheadSatellite]:
+    *,
+    catalog_cache: Mapping[int, CachedSatellite] | None = None,
+    time_budget_seconds: float | None = None,
+) -> OverheadOutcome:
     """Return catalog satellites above the observer's horizon at `at`.
 
     Sorted by elevation, descending. Satellites whose TLE fails to propagate
     to `at` are silently skipped, consistent with `screen_catalog`.
+
+    `catalog_cache` supplies precomputed `Satrec`s (see
+    `kessler.catalog_cache`) so repeated calls -- one per incoming request in
+    production -- don't re-parse every TLE in `catalog` from scratch each
+    time; omit it to always parse inline (what the unit tests below do).
+
+    `time_budget_seconds`, if given, bounds total wall-clock time: once
+    exhausted, computation stops and returns whatever satellites were
+    already found, with `truncated=True`, rather than working through a
+    large catalog for an unbounded time.
     """
     observer_ecef_km = geodetic_to_ecef(observer_lat_deg, observer_lon_deg, observer_alt_km)
+    deadline = time.monotonic() + time_budget_seconds if time_budget_seconds is not None else None
 
     results: list[OverheadSatellite] = []
+    truncated = False
     for record in catalog:
-        satrec = satrec_from_tle(record.line1, record.line2)
+        if deadline is not None and time.monotonic() >= deadline:
+            truncated = True
+            break
+
+        satrec = _resolve_satrec(record, catalog_cache)
         try:
             position = position_at(satrec, at)
         except PropagationError:
@@ -189,4 +238,4 @@ def find_overhead(
         )
 
     results.sort(key=lambda r: r.elevation_deg, reverse=True)
-    return results
+    return OverheadOutcome(satellites=results, truncated=truncated)

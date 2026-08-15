@@ -117,6 +117,14 @@ curl "http://localhost:8000/health"
 catalog) make it easy to tell a deployment is up but hasn't ingested data yet
 versus genuinely unhealthy.
 
+`/health` is served from an in-process snapshot refreshed on every ingest
+(and computed once lazily if nothing has warmed it yet, e.g. right after a
+restart against an already-populated volume), never by querying the catalog
+directly -- so a health check can't be delayed by whatever ingest or
+request work happens to be touching the database at the same moment. This
+matters because Fly's health check is what decides whether the machine is
+considered up at all.
+
 ### Get a satellite's current position
 
 ```bash
@@ -246,6 +254,7 @@ Example response:
   "observer": {"lat": 51.5074, "lon": -0.1278, "alt_m": 0.0},
   "min_elevation_deg": 10.0,
   "count": 1,
+  "truncated": false,
   "satellites": [
     {
       "norad_id": 25544,
@@ -272,6 +281,21 @@ north. Results are sorted by elevation, descending.
 
 Returns `422` for `lat`, `lon`, or `min_elevation_deg` outside their allowed
 ranges.
+
+Unlike `/conjunctions`, nothing about a satellite's *current* position can
+be pruned ahead of time, so every catalog object is propagated on every
+call -- against a large catalog that's still expensive enough to saturate a
+single shared vCPU. It gets the same treatment as screening: computation
+runs off the event loop in the same worker thread pool
+(`KESSLER_SCREENING_MAX_WORKERS`), under a hard wall-clock budget
+(`KESSLER_OVERHEAD_TIME_BUDGET_SECONDS`, default 5s -- `"truncated": true`
+if hit), reuses the cached per-catalog-object `Satrec` from
+`kessler/catalog_cache.py`, and caches whole responses for 30s
+(`KESSLER_OVERHEAD_CACHE_TTL_SECONDS`) per (rounded lat, rounded lon,
+`min_elevation_deg`) -- rounded to 2 decimal places, so the sky view's own
+repeated 30s polls from one location share a cache entry despite GPS/network
+location jitter. `observer` always echoes back the exact `lat`/`lon`/`alt_m`
+from the current request, even on a cache hit.
 
 ## Authentication
 
