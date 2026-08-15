@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
 import os
+import re
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -13,6 +15,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from kessler.db import (
     DEFAULT_DB_PATH,
@@ -29,9 +32,12 @@ from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
 
 logger = logging.getLogger(__name__)
 
-DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
-WORLD_JSON_PATH = Path(__file__).parent / "static" / "world.json"
-SKY_HTML_PATH = Path(__file__).parent / "static" / "sky.html"
+STATIC_DIR = Path(__file__).parent / "static"
+INDEX_HTML_PATH = STATIC_DIR / "index.html"
+DEMO_HTML_PATH = STATIC_DIR / "demo.html"
+WORLD_JSON_PATH = STATIC_DIR / "world.json"
+SKY_HTML_PATH = STATIC_DIR / "sky.html"
+ACCURACY_MD_PATH = Path(__file__).parent.parent / "docs" / "accuracy.md"
 
 AUTO_INGEST_ENV_VAR = "KESSLER_AUTO_INGEST"
 INGEST_REFRESH_INTERVAL_HOURS = 12.0
@@ -112,6 +118,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 STALE_THRESHOLD_HOURS = 72.0
 API_KEYS_ENV_VAR = "KESSLER_API_KEYS"
 
@@ -191,6 +199,24 @@ async def health(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, object
 
 
 @app.get(
+    "/",
+    tags=["demo"],
+    summary="Landing page",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def get_index() -> HTMLResponse:
+    """Serve the landing page: what kessler is, three live catalog numbers,
+    and links into the sky view, world map, and API docs.
+
+    Self-contained HTML/CSS/JS, no build step -- the live numbers are
+    fetched client-side from `/health` and `/overhead`, same pattern as
+    `/demo` and `/sky`.
+    """
+    return HTMLResponse(INDEX_HTML_PATH.read_text(encoding="utf-8"))
+
+
+@app.get(
     "/demo",
     tags=["demo"],
     summary="Live demo map of the API",
@@ -241,6 +267,131 @@ async def get_sky() -> HTMLResponse:
     external dependencies -- a shop window for `/overhead`, not a product UI.
     """
     return HTMLResponse(SKY_HTML_PATH.read_text(encoding="utf-8"))
+
+
+def _render_inline_markdown(text: str) -> str:
+    """Escape HTML and render `**bold**` and `` `code` `` spans."""
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+    return escaped
+
+
+def _render_markdown(text: str) -> str:
+    """Render a small subset of Markdown to HTML: headers, bold, inline
+    code, paragraphs, and unordered lists.
+
+    This is just enough to render `docs/accuracy.md`, not a general-purpose
+    Markdown parser -- kessler has one Markdown doc to serve, so a small
+    hand-rolled renderer is simpler than adding a dependency for it.
+    """
+    blocks = re.split(r"\n\s*\n", text.strip())
+    rendered = []
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if lines[0].startswith("### "):
+            rendered.append(f"<h3>{_render_inline_markdown(lines[0][4:])}</h3>")
+        elif lines[0].startswith("## "):
+            rendered.append(f"<h2>{_render_inline_markdown(lines[0][3:])}</h2>")
+        elif lines[0].startswith("# "):
+            rendered.append(f"<h1>{_render_inline_markdown(lines[0][2:])}</h1>")
+        elif lines[0].startswith("- "):
+            items: list[str] = []
+            for line in lines:
+                if line.startswith("- "):
+                    items.append(line[2:])
+                else:
+                    items[-1] += " " + line
+            list_items = "".join(f"<li>{_render_inline_markdown(item)}</li>" for item in items)
+            rendered.append(f"<ul>{list_items}</ul>")
+        else:
+            rendered.append(f"<p>{_render_inline_markdown(' '.join(lines))}</p>")
+    return "\n".join(rendered)
+
+
+@app.get(
+    "/docs/accuracy",
+    tags=["demo"],
+    summary="Accuracy notes (rendered docs/accuracy.md)",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def get_accuracy_docs() -> HTMLResponse:
+    """Serve `docs/accuracy.md`, rendered to plain HTML, so the disclaimer
+    linked from every page's footer resolves to a readable page rather than
+    a raw repo file.
+    """
+    body = _render_markdown(ACCURACY_MD_PATH.read_text(encoding="utf-8"))
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler &mdash; accuracy notes</title>
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+  * {{ box-sizing: border-box; }}
+
+  html, body {{
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas,
+      "Liberation Mono", Menlo, monospace;
+  }}
+
+  main {{
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 3rem;
+    line-height: 1.65;
+    font-size: 0.9rem;
+  }}
+
+  main h1 {{ font-size: 1.4rem; }}
+  main h2 {{ font-size: 1.1rem; margin-top: 2rem; }}
+  main code {{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.85em;
+  }}
+  main a {{ color: var(--accent); }}
+  main ul {{ padding-left: 1.25rem; }}
+  main li {{ margin-bottom: 0.5rem; }}
+</style>
+</head>
+<body>
+  <header class="kessler-header">
+    <a class="wordmark" href="/">kessler</a>
+    <nav class="kessler-nav">
+      <a href="/sky">Sky view</a>
+      <a href="/demo">World map</a>
+      <a href="/docs">API</a>
+    </nav>
+  </header>
+
+  <main>
+{body}
+  </main>
+
+  <footer class="kessler-footer">
+    <span>Data: <a href="https://celestrak.org/" target="_blank" rel="noopener">Celestrak</a></span>
+    <span class="sep">&middot;</span>
+    <span>Geometric miss distance only, not a collision probability &mdash;
+      <a href="/docs/accuracy">accuracy notes</a></span>
+    <span class="sep">&middot;</span>
+    <a href="/docs">API docs</a>
+  </footer>
+</body>
+</html>
+"""
+    return HTMLResponse(page)
 
 
 @app.get(

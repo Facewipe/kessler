@@ -6,6 +6,7 @@ WORKDIR /app
 # stay cached when application code changes without a dependency bump.
 COPY pyproject.toml README.md ./
 COPY kessler ./kessler
+COPY docs ./docs
 
 RUN pip install --no-cache-dir .
 

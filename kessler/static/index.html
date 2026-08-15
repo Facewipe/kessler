@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler &mdash; satellite conjunction screening API</title>
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 3rem 1.25rem 2.5rem;
+    text-align: center;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 2rem;
+    letter-spacing: 0.02em;
+  }
+
+  .tagline {
+    margin: 0.9rem 0 0;
+    max-width: 40ch;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.85rem;
+    margin: 2.25rem 0;
+    width: 100%;
+    max-width: 640px;
+  }
+
+  .stat {
+    flex: 1 1 160px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 0.75rem;
+  }
+
+  .stat .value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .stat .label {
+    margin-top: 0.35rem;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    letter-spacing: 0.03em;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+
+  .actions a {
+    padding: 0.65rem 1.15rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.85rem;
+    background: var(--panel);
+  }
+
+  .actions a:hover,
+  .actions a:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .actions a.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04121a;
+    font-weight: 600;
+  }
+
+  .actions a.primary:hover,
+  .actions a.primary:focus-visible {
+    color: #04121a;
+  }
+</style>
+</head>
+<body>
+  <header class="kessler-header">
+    <a class="wordmark" href="/">kessler</a>
+    <nav class="kessler-nav">
+      <a href="/sky">Sky view</a>
+      <a href="/demo">World map</a>
+      <a href="/docs">API</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>kessler</h1>
+    <p class="tagline">
+      Live positions and conjunction screening for tracked objects, built on
+      public orbital data.
+    </p>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="value" id="stat-catalog">&mdash;</div>
+        <div class="label">satellites tracked</div>
+      </div>
+      <div class="stat">
+        <div class="value" id="stat-overhead">&mdash;</div>
+        <div class="label" id="stat-overhead-label">overhead right now</div>
+      </div>
+      <div class="stat">
+        <div class="value" id="stat-epoch">&mdash;</div>
+        <div class="label">newest TLE age</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <a class="primary" href="/sky">Open sky view</a>
+      <a href="/demo">Open world map</a>
+      <a href="/docs">Explore the API</a>
+    </div>
+  </main>
+
+  <footer class="kessler-footer">
+    <span>Data: <a href="https://celestrak.org/" target="_blank" rel="noopener">Celestrak</a></span>
+    <span class="sep">&middot;</span>
+    <span>Geometric miss distance only, not a collision probability &mdash; <a href="/docs/accuracy">accuracy notes</a></span>
+    <span class="sep">&middot;</span>
+    <a href="/docs">API docs</a>
+  </footer>
+
+  <script>
+    // Default observer used for the "overhead right now" stat: London, to
+    // match the worked example in the API docs. Just a live number for the
+    // landing page, not a location picker.
+    var DEFAULT_LAT = 51.5074;
+    var DEFAULT_LON = -0.1278;
+
+    document.getElementById("stat-overhead-label").textContent = "overhead London now";
+
+    fetch("/health")
+      .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
+      .then(function (data) {
+        document.getElementById("stat-catalog").textContent =
+          data.catalog_size != null ? data.catalog_size.toLocaleString() : "—";
+        document.getElementById("stat-epoch").textContent =
+          data.newest_tle_epoch_age_hours != null
+            ? data.newest_tle_epoch_age_hours.toFixed(1) + " h"
+            : "—";
+      })
+      .catch(function () {
+        document.getElementById("stat-catalog").textContent = "—";
+        document.getElementById("stat-epoch").textContent = "—";
+      });
+
+    fetch("/overhead?lat=" + DEFAULT_LAT + "&lon=" + DEFAULT_LON)
+      .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
+      .then(function (data) {
+        document.getElementById("stat-overhead").textContent = data.count;
+      })
+      .catch(function () {
+        document.getElementById("stat-overhead").textContent = "—";
+      });
+  </script>
+</body>
+</html>

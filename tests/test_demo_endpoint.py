@@ -15,6 +15,16 @@ def test_demo_returns_html() -> None:
     assert "<html" in response.text.lower()
 
 
+def test_demo_includes_shared_nav_and_footer() -> None:
+    response = client.get("/demo")
+
+    assert "kessler-header" in response.text
+    assert "Sky view" in response.text
+    assert 'href="/demo" class="active"' in response.text
+    assert "kessler-footer" in response.text
+    assert "Celestrak" in response.text
+
+
 def test_world_json_returns_land_polygons() -> None:
     response = client.get("/world.json")
 
