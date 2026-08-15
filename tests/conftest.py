@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kessler.api import AUTO_INGEST_ENV_VAR, app, get_db
+from kessler.api import _screening_cache as api_screening_cache
+from kessler.catalog_cache import reset_cache as reset_catalog_cache
 from kessler.db import SatelliteRecord, get_connection, upsert_satellite
 
 # SGP4 validation test satellite from Vallado, Crawford, Hujsak & Kelso,
@@ -24,6 +26,25 @@ def _disable_auto_ingest(monkeypatch):
     makes a real network call to Celestrak.
     """
     monkeypatch.setenv(AUTO_INGEST_ENV_VAR, "0")
+
+
+@pytest.fixture(autouse=True)
+def _reset_screening_caches():
+    """Clear the process-wide screening result cache and catalog cache
+    before and after every test.
+
+    Both are keyed independently of which SQLite file backs them (the
+    screening cache by (norad_id, hours, threshold_km, min_separation_km);
+    the catalog cache by a (norad_id, epoch) signature), while every test
+    gets its own temporary DB via `db_conn`. Without this, a cache entry
+    written by one test could be served, stale, to a different test that
+    happens to reuse the same norad_id/params against different seeded data.
+    """
+    api_screening_cache.clear()
+    reset_catalog_cache()
+    yield
+    api_screening_cache.clear()
+    reset_catalog_cache()
 
 
 @pytest.fixture

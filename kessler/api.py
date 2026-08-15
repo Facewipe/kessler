@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,8 +18,10 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from kessler.catalog_cache import get_cached_catalog
 from kessler.db import (
     DEFAULT_DB_PATH,
+    SatelliteRecord,
     count_satellites,
     get_connection,
     get_satellite,
@@ -29,6 +32,7 @@ from kessler.ingest import run_ingest
 from kessler.overhead import DEFAULT_MIN_ELEVATION_DEG, find_overhead
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 from kessler.screen import DEFAULT_MIN_SEPARATION_KM, screen_catalog
+from kessler.ttl_cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +130,38 @@ API_KEYS_ENV_VAR = "KESSLER_API_KEYS"
 CONJUNCTION_DISCLAIMER = (
     "Geometric screening on public TLEs (SGP4), not a collision probability. "
     "No covariance is used; treat results as a geometric proximity estimate only."
+)
+
+# Screening is CPU-bound and, against a large or heavily-overlapping
+# catalog, can take seconds to minutes -- see kessler/screen.py's time
+# budget. Run it in a small, dedicated worker pool (not the default asyncio
+# executor, which is much larger) so a burst of /conjunctions requests can
+# never spin up enough concurrent screens to exhaust memory on a
+# shared-cpu-1x/1GB machine, and never on the event loop thread itself,
+# since that's what made a single heavy request look like the whole machine
+# had stopped responding (health checks share that same thread).
+SCREENING_MAX_WORKERS = int(os.environ.get("KESSLER_SCREENING_MAX_WORKERS", "2"))
+_screening_executor = ThreadPoolExecutor(
+    max_workers=SCREENING_MAX_WORKERS, thread_name_prefix="kessler-screen"
+)
+
+# Hard wall-clock cap per screen (kessler.screen.screen_catalog stops and
+# reports `truncated: true` instead of hanging once this is exhausted), well
+# under Fly's health-check timeout so a slow screen can never look like a
+# stuck machine even indirectly.
+SCREENING_TIME_BUDGET_SECONDS = float(os.environ.get("KESSLER_SCREENING_TIME_BUDGET_SECONDS", "10"))
+
+# Repeated or concurrent requests for the same target/window are common (the
+# demo and sky-view pages, or several users watching the same object) and
+# screening is expensive enough that serving them from cache instead of
+# re-screening matters. Bounded in both time (a few minutes -- long enough
+# to absorb a burst, short enough that results stay fresh against a catalog
+# that re-ingests every 12h) and size (so cache memory can't grow with
+# request variety).
+SCREENING_CACHE_TTL_SECONDS = float(os.environ.get("KESSLER_SCREENING_CACHE_TTL_SECONDS", "180"))
+SCREENING_CACHE_MAX_ENTRIES = 256
+_screening_cache: TTLCache[tuple[int, int, float, float], dict[str, object]] = TTLCache(
+    ttl_seconds=SCREENING_CACHE_TTL_SECONDS, max_entries=SCREENING_CACHE_MAX_ENTRIES
 )
 
 
@@ -478,6 +514,7 @@ async def get_position(
                         "window_end_utc": "2026-08-12T12:00:00+00:00",
                         "threshold_km": 10.0,
                         "min_separation_km": 1.0,
+                        "truncated": False,
                         "conjunctions": [
                             {
                                 "other_norad_id": 43205,
@@ -525,17 +562,67 @@ async def get_conjunctions(
 
     Reports geometric miss distance only, from public TLEs via SGP4. This is
     not a collision probability and does not account for TLE covariance.
+
+    The actual screen runs off the event loop in a worker thread, under a
+    hard time budget (`truncated: true` in the response if it was hit
+    before the full catalog could be checked), and results are cached for a
+    few minutes per (norad_id, hours, threshold_km, min_separation_km) so
+    repeated or concurrent requests for the same target are served without
+    re-screening. See `kessler/screen.py` and `kessler/catalog_cache.py`.
     """
     target = get_satellite(conn, norad_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"Unknown norad_id: {norad_id}")
 
+    cache_key = (norad_id, hours, threshold_km, min_separation_km)
+    cached = _screening_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    payload = await loop.run_in_executor(
+        _screening_executor,
+        _screen_target,
+        conn,
+        target,
+        hours,
+        threshold_km,
+        min_separation_km,
+    )
+
+    _screening_cache.set(cache_key, payload)
+    return payload
+
+
+def _screen_target(
+    conn: sqlite3.Connection,
+    target: SatelliteRecord,
+    hours: int,
+    threshold_km: float,
+    min_separation_km: float,
+) -> dict[str, object]:
+    """Blocking worker: read the catalog, screen it, and build the response.
+
+    Runs on a worker thread (see `get_conjunctions`) so a heavy screen never
+    runs on the event loop -- which is what previously made a single slow
+    `/conjunctions` request block health checks and every other in-flight
+    request, making the whole machine look unresponsive.
+    """
     window_start = datetime.now(UTC)
     window_end = window_start + timedelta(hours=hours)
 
     catalog = list_satellites(conn)
-    results = screen_catalog(
-        target, catalog, window_start, window_end, threshold_km, min_separation_km
+    catalog_cache = get_cached_catalog(catalog)
+
+    results, truncated = screen_catalog(
+        target,
+        catalog,
+        window_start,
+        window_end,
+        threshold_km,
+        min_separation_km,
+        catalog_cache=catalog_cache,
+        time_budget_seconds=SCREENING_TIME_BUDGET_SECONDS,
     )
 
     return {
@@ -546,6 +633,7 @@ async def get_conjunctions(
         "window_end_utc": window_end.isoformat(),
         "threshold_km": threshold_km,
         "min_separation_km": min_separation_km,
+        "truncated": truncated,
         "conjunctions": [
             {
                 "other_norad_id": r.other_norad_id,

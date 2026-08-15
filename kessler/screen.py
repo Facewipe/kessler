@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 from sgp4.api import Satrec
 
@@ -34,6 +36,16 @@ from kessler.db import SatelliteRecord
 from kessler.propagate import PropagationError, epoch_datetime, position_at, satrec_from_tle
 
 logger = logging.getLogger(__name__)
+
+
+class ScreeningTimeout(RuntimeError):
+    """Raised internally when a screening pass exceeds its time budget.
+
+    Caught by `screen_catalog`, which reports `truncated=True` instead of
+    letting a pathological catalog (many candidates surviving the coarse
+    orbit-overlap filter) run unbounded.
+    """
+
 
 _EARTH_RADIUS_KM = 6378.137
 _EARTH_MU_KM3_S2 = 398600.4418
@@ -82,6 +94,29 @@ class ConjunctionResult:
     other_epoch_age_hours: float
 
 
+@dataclass(frozen=True)
+class CachedSatellite:
+    """A catalog record's precomputed `Satrec` and `OrbitRange`.
+
+    Parsing a TLE into a `Satrec` and deriving its orbit range is identical
+    work regardless of which target is being screened, so it belongs outside
+    the per-request path -- see `kessler.catalog_cache`, which builds and
+    caches these once per ingest cycle rather than once per request.
+    """
+
+    record: SatelliteRecord
+    satrec: Satrec
+    orbit_range: OrbitRange
+
+
+class ScreeningOutcome(NamedTuple):
+    """Result of `screen_catalog`: the conjunctions found, and whether the
+    time budget was exhausted before the full catalog could be screened."""
+
+    results: list[ConjunctionResult]
+    truncated: bool
+
+
 def orbit_range(satrec: Satrec) -> OrbitRange:
     """Approximate perigee/apogee altitude (km) from a `Satrec`'s mean elements.
 
@@ -124,6 +159,7 @@ def find_close_approaches(
     coarse_step_seconds: float = COARSE_STEP_SECONDS,
     fine_step_seconds: float = FINE_STEP_SECONDS,
     min_separation_km: float = DEFAULT_MIN_SEPARATION_KM,
+    deadline: float | None = None,
 ) -> list[ConjunctionCandidate]:
     """Find local-minimum close approaches between two satellites over [start, end].
 
@@ -136,12 +172,22 @@ def find_close_approaches(
     the pair is treated as co-located (formation flying or docked, e.g. an
     ISS module and a docked vehicle) rather than a conjunction, and no
     candidates are returned.
+
+    `deadline` is a `time.monotonic()` cutoff. If given, it's checked before
+    every coarse-grid sample -- a single pair over a long window/threshold is
+    itself expensive enough (see `screen_catalog`'s time budget) to need
+    checking within, not just between, pairs -- and raises `ScreeningTimeout`
+    as soon as it passes.
     """
     coarse_times = _time_grid(start, end, coarse_step_seconds)
     if len(coarse_times) < 2:
         return []
 
-    distances = [_distance_km(target, other, t) for t in coarse_times]
+    distances = []
+    for t in coarse_times:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ScreeningTimeout()
+        distances.append(_distance_km(target, other, t))
     max_distance_km = max(distances)
 
     logger.debug(
@@ -174,6 +220,24 @@ def find_close_approaches(
     return candidates
 
 
+def _resolve(
+    record: SatelliteRecord, catalog_cache: Mapping[int, CachedSatellite] | None
+) -> tuple[Satrec, OrbitRange]:
+    """Return `record`'s `(Satrec, OrbitRange)`, from `catalog_cache` if present.
+
+    Falls back to parsing/deriving them on the spot when the cache is `None`
+    (plain unit-test usage) or doesn't have this record (e.g. it was
+    inserted after the cache was last built) -- correctness never depends on
+    the cache being warm, only performance does.
+    """
+    if catalog_cache is not None:
+        cached = catalog_cache.get(record.norad_id)
+        if cached is not None:
+            return cached.satrec, cached.orbit_range
+    satrec = satrec_from_tle(record.line1, record.line2)
+    return satrec, orbit_range(satrec)
+
+
 def screen_catalog(
     target: SatelliteRecord,
     catalog: Iterable[SatelliteRecord],
@@ -181,7 +245,10 @@ def screen_catalog(
     end: datetime,
     threshold_km: float,
     min_separation_km: float = DEFAULT_MIN_SEPARATION_KM,
-) -> list[ConjunctionResult]:
+    *,
+    catalog_cache: Mapping[int, CachedSatellite] | None = None,
+    time_budget_seconds: float | None = None,
+) -> ScreeningOutcome:
     """Screen `target` against `catalog` for conjunctions over [start, end].
 
     Applies a coarse apogee/perigee overlap filter (buffered by
@@ -195,19 +262,35 @@ def screen_catalog(
     propagation even for a physically co-located object. Epoch ages are
     measured relative to `start`. Results are sorted by miss distance,
     ascending.
+
+    `catalog_cache` supplies precomputed `Satrec`/`OrbitRange` pairs (see
+    `kessler.catalog_cache`) so repeated calls -- one per incoming request in
+    production -- don't re-parse every TLE in `catalog` from scratch each
+    time; omit it to always parse inline (what the unit tests below do).
+
+    `time_budget_seconds`, if given, bounds total wall-clock time: once
+    exhausted, screening stops (mid-pair if necessary) and returns whatever
+    results were already found, with `truncated=True`, rather than working
+    through a large or heavily-overlapping catalog for an unbounded time.
     """
-    target_satrec = satrec_from_tle(target.line1, target.line2)
-    target_range = orbit_range(target_satrec)
+    deadline = time.monotonic() + time_budget_seconds if time_budget_seconds is not None else None
+
+    target_satrec, target_range = _resolve(target, catalog_cache)
     target_epoch = epoch_datetime(target_satrec)
     target_epoch_age_hours = (start - target_epoch).total_seconds() / 3600
 
     results: list[ConjunctionResult] = []
+    truncated = False
     for other in catalog:
         if other.norad_id == target.norad_id:
             continue
 
-        other_satrec = satrec_from_tle(other.line1, other.line2)
-        if not ranges_overlap(target_range, orbit_range(other_satrec), threshold_km):
+        if deadline is not None and time.monotonic() >= deadline:
+            truncated = True
+            break
+
+        other_satrec, other_range = _resolve(other, catalog_cache)
+        if not ranges_overlap(target_range, other_range, threshold_km):
             continue
 
         other_epoch_age_hours = (start - epoch_datetime(other_satrec)).total_seconds() / 3600
@@ -222,9 +305,13 @@ def screen_catalog(
                 min_separation_km=colocation_bound_km(
                     min_separation_km, target_epoch_age_hours - other_epoch_age_hours
                 ),
+                deadline=deadline,
             )
         except PropagationError:
             continue
+        except ScreeningTimeout:
+            truncated = True
+            break
         if not candidates:
             continue
 
@@ -241,7 +328,7 @@ def screen_catalog(
         )
 
     results.sort(key=lambda r: r.miss_distance_km)
-    return results
+    return ScreeningOutcome(results=results, truncated=truncated)
 
 
 def _distance_km(satrec_a: Satrec, satrec_b: Satrec, at: datetime) -> float:

@@ -186,6 +186,7 @@ Example response (illustrative, with a fuller catalog):
   "window_end_utc": "2026-08-12T12:00:00+00:00",
   "threshold_km": 10.0,
   "min_separation_km": 1.0,
+  "truncated": false,
   "conjunctions": [
     {
       "other_norad_id": 43205,
@@ -210,6 +211,21 @@ collision probability.
 
 Returns `404` for an unknown `norad_id` and `422` for `hours`,
 `threshold_km`, or `min_separation_km` outside their allowed ranges.
+
+Screening is the most expensive endpoint in the API (worst case: every
+catalog object survives the coarse filter and needs full propagation), so it
+runs off the event loop in a small worker thread pool
+(`KESSLER_SCREENING_MAX_WORKERS`, default 2 -- bounded so a burst of
+requests can't exhaust memory), under a hard wall-clock budget
+(`KESSLER_SCREENING_TIME_BUDGET_SECONDS`, default 10s) --
+if the budget is exhausted, the response reports whatever was found so far
+with `"truncated": true` rather than hanging. Per-catalog-object `Satrec`
+parsing and orbit-range computation is cached in-process and only rebuilt
+when the catalog actually changes (see `kessler/catalog_cache.py`), and
+whole responses are cached for a few minutes per (norad_id, hours,
+threshold_km, min_separation_km) (`KESSLER_SCREENING_CACHE_TTL_SECONDS`,
+default 180s) so repeated or concurrent requests for the same target don't
+re-screen from scratch.
 
 ### List satellites currently overhead
 
