@@ -81,6 +81,8 @@
   #controls {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.5rem;
     margin-bottom: 1rem;
     font-size: 0.75rem;
@@ -157,15 +159,31 @@
     dominant-baseline: middle;
   }
 
-  .sat-dot {
-    stroke: #04121a;
-    stroke-width: 0.6;
+  .sat-marker {
+    outline: none;
+  }
+
+  .sat-hit {
+    fill: transparent;
+    pointer-events: all;
     cursor: pointer;
   }
 
-  .sat-dot:hover, .sat-dot.selected {
+  .sat-dot {
+    stroke: #04121a;
+    stroke-width: 0.6;
+    pointer-events: none;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 0.12s ease, stroke-width 0.12s ease;
+  }
+
+  .sat-marker.hover .sat-dot,
+  .sat-marker.selected .sat-dot,
+  .sat-marker:focus-visible .sat-dot {
     stroke: #ffffff;
-    stroke-width: 1;
+    stroke-width: 1.6;
+    transform: scale(1.45);
   }
 
   #legend {
@@ -197,12 +215,14 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 0.5rem 0.65rem;
+    padding: 0.5rem 1.6rem 0.5rem 0.65rem;
     font-size: 0.72rem;
     line-height: 1.5;
     color: var(--text);
-    pointer-events: none;
-    white-space: nowrap;
+    pointer-events: auto;
+    white-space: normal;
+    word-break: break-word;
+    max-width: min(220px, calc(100vw - 20px));
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
   }
 
@@ -214,6 +234,26 @@
 
   #tooltip .row .k {
     color: var(--text-dim);
+  }
+
+  #tooltip .tooltip-close {
+    position: absolute;
+    top: 0.15rem;
+    right: 0.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  #tooltip .tooltip-close:hover,
+  #tooltip .tooltip-close:focus-visible {
+    color: var(--text);
   }
 </style>
 </head>
@@ -281,7 +321,10 @@
     var observer = null;
     var currentMinElevation = 10;
     var refreshTimer = null;
-    var tooltipNoradId = null;
+    var selectedNoradId = null;
+    var satIndex = {};
+    var hoveredMarker = null;
+    var lastTooltipPos = null;
 
     function regimeFor(altKm) {
       if (altKm < 2000) return "LEO";
@@ -330,17 +373,77 @@
       });
     }
 
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    function currentScale() {
+      var svg = document.getElementById("chart");
+      var ctm = svg.getScreenCTM();
+      if (ctm && ctm.a) return ctm.a;
+      var rect = svg.getBoundingClientRect();
+      return rect.width > 0 ? rect.width / 400 : 1;
+    }
+
+    // Hit areas must be at least 22px in diameter on screen, independent of
+    // the (range-based) visible dot size, so distant/small dots stay tappable.
+    function hitRadius(dotR) {
+      var minR = 11 / currentScale();
+      return Math.max(minR, dotR + 3);
+    }
+
+    function updateHitRadii() {
+      var hits = skyLayer.querySelectorAll(".sat-hit");
+      hits.forEach(function (hit) {
+        hit.setAttribute("r", hitRadius(parseFloat(hit.dataset.dotR)));
+      });
+    }
+
+    // Overlapping hit areas: pick the one whose center is closest to the
+    // pointer among everything actually under it, not just the topmost.
+    function pickMarkerAt(clientX, clientY) {
+      var candidates = document.elementsFromPoint(clientX, clientY).filter(function (el) {
+        return el.classList && el.classList.contains("sat-hit");
+      });
+      if (!candidates.length) return null;
+      var best = null;
+      var bestDist = Infinity;
+      candidates.forEach(function (el) {
+        var rect = el.getBoundingClientRect();
+        var dx = rect.left + rect.width / 2 - clientX;
+        var dy = rect.top + rect.height / 2 - clientY;
+        var dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = el;
+        }
+      });
+      return best ? best.closest(".sat-marker") : null;
+    }
+
+    function setHovered(marker) {
+      if (hoveredMarker === marker) return;
+      if (hoveredMarker) hoveredMarker.classList.remove("hover");
+      hoveredMarker = marker;
+      if (hoveredMarker) hoveredMarker.classList.add("hover");
+    }
+
     function hideTooltip() {
       tooltipEl.style.display = "none";
-      tooltipNoradId = null;
-      var selected = skyLayer.querySelector(".sat-dot.selected");
+      selectedNoradId = null;
+      lastTooltipPos = null;
+      var selected = skyLayer.querySelector(".sat-marker.selected");
       if (selected) selected.classList.remove("selected");
     }
 
-    function showTooltip(sat, clientX, clientY, target) {
-      tooltipNoradId = sat.norad_id;
+    function showTooltip(sat, clientX, clientY) {
+      selectedNoradId = sat.norad_id;
+      lastTooltipPos = { x: clientX, y: clientY };
       tooltipEl.innerHTML =
-        '<div class="name">' + sat.name + "</div>" +
+        '<button type="button" class="tooltip-close" aria-label="Close">&times;</button>' +
+        '<div class="name">' + escapeHtml(sat.name) + "</div>" +
         '<div class="row"><span class="k">NORAD ID</span> ' + sat.norad_id + "</div>" +
         '<div class="row"><span class="k">elevation</span> ' + sat.elevation_deg.toFixed(1) + "°</div>" +
         '<div class="row"><span class="k">azimuth</span> ' + sat.azimuth_deg.toFixed(1) + "°</div>" +
@@ -348,55 +451,128 @@
         '<div class="row"><span class="k">range</span> ' + sat.range_km.toFixed(1) + " km</div>";
       tooltipEl.style.display = "block";
 
-      var wrapRect = document.getElementById("chart-wrap").getBoundingClientRect();
+      var pad = 10;
+      var rect = tooltipEl.getBoundingClientRect();
+      var vw = window.innerWidth;
+      var vh = window.innerHeight;
       var left = clientX + 12;
       var top = clientY + 12;
-      if (left + 200 > wrapRect.right) left = clientX - 212;
+      if (left + rect.width + pad > vw) left = clientX - rect.width - 12;
+      if (left < pad) left = pad;
+      if (top + rect.height + pad > vh) top = clientY - rect.height - 12;
+      if (top < pad) top = pad;
       tooltipEl.style.left = left + "px";
       tooltipEl.style.top = top + "px";
 
-      if (target) target.classList.add("selected");
+      var previous = skyLayer.querySelector(".sat-marker.selected");
+      var entry = satIndex[sat.norad_id];
+      var marker = entry ? entry.group : null;
+      if (previous && previous !== marker) previous.classList.remove("selected");
+      if (marker) marker.classList.add("selected");
+
+      tooltipEl.querySelector(".tooltip-close").addEventListener("click", function (e) {
+        e.stopPropagation();
+        hideTooltip();
+      });
+    }
+
+    function selectSat(noradId, clientX, clientY) {
+      var entry = satIndex[noradId];
+      if (!entry) return;
+      if (String(selectedNoradId) === String(noradId)) {
+        hideTooltip();
+        return;
+      }
+      showTooltip(entry.sat, clientX, clientY);
+    }
+
+    function selectSatFromMarker(marker) {
+      var rect = marker.querySelector(".sat-dot").getBoundingClientRect();
+      selectSat(marker.dataset.noradId, rect.left + rect.width / 2, rect.top + rect.height / 2);
     }
 
     function render(data) {
       headlineN.textContent = data.count;
       updateRings(currentMinElevation);
       skyLayer.innerHTML = "";
+      satIndex = {};
+      hoveredMarker = null;
 
       data.satellites.forEach(function (sat) {
         var point = polarPoint(sat.azimuth_deg, sat.elevation_deg, currentMinElevation);
         var regime = regimeFor(sat.alt_km);
+        var dotR = dotRadius(sat.range_km);
 
-        var circle = document.createElementNS(svgNS, "circle");
-        circle.setAttribute("class", "sat-dot");
-        circle.setAttribute("cx", point.x);
-        circle.setAttribute("cy", point.y);
-        circle.setAttribute("r", dotRadius(sat.range_km));
-        circle.setAttribute("fill", REGIME_COLOR[regime]);
-        if (sat.norad_id === tooltipNoradId) circle.classList.add("selected");
+        var group = document.createElementNS(svgNS, "g");
+        group.setAttribute("class", "sat-marker");
+        group.setAttribute("tabindex", "0");
+        group.setAttribute("role", "button");
+        group.setAttribute(
+          "aria-label",
+          sat.name + ", elevation " + sat.elevation_deg.toFixed(0) +
+            " degrees, azimuth " + sat.azimuth_deg.toFixed(0) + " degrees"
+        );
+        group.dataset.noradId = sat.norad_id;
+        if (sat.norad_id === selectedNoradId) group.classList.add("selected");
 
-        circle.addEventListener("mouseenter", function (e) {
-          showTooltip(sat, e.clientX, e.clientY, circle);
-        });
-        circle.addEventListener("mousemove", function (e) {
-          if (tooltipNoradId === sat.norad_id) showTooltip(sat, e.clientX, e.clientY, circle);
-        });
-        circle.addEventListener("mouseleave", hideTooltip);
-        circle.addEventListener("click", function (e) {
-          e.stopPropagation();
-          if (tooltipNoradId === sat.norad_id) {
-            hideTooltip();
-          } else {
-            var rect = circle.getBoundingClientRect();
-            showTooltip(sat, rect.left + rect.width / 2, rect.top, circle);
+        var hit = document.createElementNS(svgNS, "circle");
+        hit.setAttribute("class", "sat-hit");
+        hit.setAttribute("cx", point.x);
+        hit.setAttribute("cy", point.y);
+        hit.setAttribute("r", hitRadius(dotR));
+        hit.dataset.dotR = dotR;
+
+        var dot = document.createElementNS(svgNS, "circle");
+        dot.setAttribute("class", "sat-dot");
+        dot.setAttribute("cx", point.x);
+        dot.setAttribute("cy", point.y);
+        dot.setAttribute("r", dotR);
+        dot.setAttribute("fill", REGIME_COLOR[regime]);
+
+        group.appendChild(hit);
+        group.appendChild(dot);
+
+        group.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+            e.preventDefault();
+            selectSatFromMarker(group);
           }
         });
 
-        skyLayer.appendChild(circle);
+        skyLayer.appendChild(group);
+        satIndex[sat.norad_id] = { sat: sat, group: group };
       });
+
+      if (selectedNoradId && !satIndex[selectedNoradId]) hideTooltip();
     }
 
+    var chartSvg = document.getElementById("chart");
+
+    chartSvg.addEventListener("mousemove", function (e) {
+      setHovered(pickMarkerAt(e.clientX, e.clientY));
+    });
+    chartSvg.addEventListener("mouseleave", function () {
+      setHovered(null);
+    });
+    chartSvg.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var marker = pickMarkerAt(e.clientX, e.clientY);
+      if (!marker) {
+        hideTooltip();
+        return;
+      }
+      selectSat(marker.dataset.noradId, e.clientX, e.clientY);
+    });
+
+    tooltipEl.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+
     document.addEventListener("click", hideTooltip);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") hideTooltip();
+    });
+    window.addEventListener("resize", updateHitRadii);
 
     function setLocationStatus(text) {
       locationEl.textContent = text;
