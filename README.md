@@ -225,7 +225,10 @@ catalog object survives the coarse filter and needs full propagation), so it
 runs off the event loop in a small worker thread pool
 (`KESSLER_SCREENING_MAX_WORKERS`, default 2 -- bounded so a burst of
 requests can't exhaust memory), under a hard wall-clock budget
-(`KESSLER_SCREENING_TIME_BUDGET_SECONDS`, default 10s) --
+(`KESSLER_SCREENING_TIME_BUDGET_SECONDS`, default 30s -- against a real
+~16k-object catalog, a routine ISS-class target has several hundred
+same-altitude-band candidates and a full screen genuinely takes ~15s; a
+tighter budget was truncating routine requests in production) --
 if the budget is exhausted, the response reports whatever was found so far
 with `"truncated": true` rather than hanging. Per-catalog-object `Satrec`
 parsing and orbit-range computation is cached in-process and only rebuilt
@@ -234,6 +237,25 @@ whole responses are cached for a few minutes per (norad_id, hours,
 threshold_km, min_separation_km) (`KESSLER_SCREENING_CACHE_TTL_SECONDS`,
 default 180s) so repeated or concurrent requests for the same target don't
 re-screen from scratch.
+
+### View a satellite's conjunctions (human-readable)
+
+```bash
+open "http://localhost:8000/conjunctions/25544/view"
+```
+
+`GET /conjunctions/{norad_id}/view` is a human-readable page over the same
+data as the JSON endpoint above -- the target's name/NORAD ID and the
+screening window, a results table (other object, time of closest approach
+as both a UTC timestamp and "in 2 days 4 hours", miss distance, and both
+objects' TLE age) with rows visually graded by miss distance so the
+closest approach stands out, a plain-language notice when the response is
+`truncated`, and controls to change the window (24h/72h/7d) and threshold
+(5/10/25km). It's a self-contained HTML/CSS/JS shell, same pattern as
+`/demo` and `/sky`: `norad_id` isn't server-side templated in, the page
+reads it from its own URL and calls the JSON endpoint from the browser, so
+it's one static file regardless of target. The sky view's "see
+conjunctions" link opens this page, not the raw JSON.
 
 ### List satellites currently overhead
 

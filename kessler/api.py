@@ -42,6 +42,7 @@ INDEX_HTML_PATH = STATIC_DIR / "index.html"
 DEMO_HTML_PATH = STATIC_DIR / "demo.html"
 WORLD_JSON_PATH = STATIC_DIR / "world.json"
 SKY_HTML_PATH = STATIC_DIR / "sky.html"
+CONJUNCTIONS_HTML_PATH = STATIC_DIR / "conjunctions.html"
 ACCURACY_MD_PATH = Path(__file__).parent.parent / "docs" / "accuracy.md"
 
 AUTO_INGEST_ENV_VAR = "KESSLER_AUTO_INGEST"
@@ -183,10 +184,24 @@ _screening_executor = ThreadPoolExecutor(
 )
 
 # Hard wall-clock cap per screen (kessler.screen.screen_catalog stops and
-# reports `truncated: true` instead of hanging once this is exhausted), well
-# under Fly's health-check timeout so a slow screen can never look like a
-# stuck machine even indirectly.
-SCREENING_TIME_BUDGET_SECONDS = float(os.environ.get("KESSLER_SCREENING_TIME_BUDGET_SECONDS", "10"))
+# reports `truncated: true` instead of hanging once this is exhausted).
+# Screening no longer runs on the event loop (see _screening_executor
+# above), so this budget only needs to keep worst-case *request* latency and
+# worker-thread occupancy reasonable -- it no longer risks looking like a
+# stuck machine to Fly's health check the way it did before that fix.
+#
+# 10s was too tight in production: a routine ISS-class target was hitting
+# it and returning truncated results. Investigated against a real ~16k
+# object Celestrak snapshot (`active` group) -- ISS (25544) has 467 catalog
+# objects sharing its altitude band at the default threshold_km=10 (LEO
+# near ISS's ~415km band is genuinely crowded; that's not a filter bug), and
+# a full, untruncated screen of all 467 over the default 72h window took
+# ~15.8s on ordinary dev hardware. 30s covers that with ~2x margin for a
+# slower shared vCPU in production, while still bounding the pathological
+# end (max threshold_km=50 pulls in ~11000 candidates and would take
+# several minutes unconstrained -- that's exactly the case this budget
+# exists to cut off, and it still will).
+SCREENING_TIME_BUDGET_SECONDS = float(os.environ.get("KESSLER_SCREENING_TIME_BUDGET_SECONDS", "30"))
 
 # Repeated or concurrent requests for the same target/window are common (the
 # demo and sky-view pages, or several users watching the same object) and
@@ -667,6 +682,29 @@ async def get_conjunctions(
 
     _screening_cache.set(cache_key, payload)
     return payload
+
+
+@app.get(
+    "/conjunctions/{norad_id}/view",
+    tags=["conjunctions"],
+    summary="Human-readable conjunctions page",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def get_conjunctions_view(norad_id: int) -> HTMLResponse:
+    """Serve a human-readable page for a target's conjunctions.
+
+    `GET /conjunctions/{norad_id}` on its own is raw JSON, which looks
+    broken to anyone who lands on it directly (e.g. via the sky view's
+    "see conjunctions" link). This is a self-contained HTML/CSS/JS shell,
+    same pattern as `/demo` and `/sky` -- `norad_id` isn't server-side
+    templated in at all; the page reads it back out of its own URL and
+    calls the JSON endpoint above from the browser. The `norad_id: int`
+    parameter here exists only so FastAPI 422s a non-numeric ID immediately
+    rather than serving the shell for it; an unknown-but-numeric ID instead
+    surfaces the JSON endpoint's own 404 client-side.
+    """
+    return HTMLResponse(CONJUNCTIONS_HTML_PATH.read_text(encoding="utf-8"))
 
 
 def _screen_target(
