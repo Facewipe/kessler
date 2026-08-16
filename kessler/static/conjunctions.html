@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kessler &mdash; conjunctions</title>
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas,
+      "Liberation Mono", Menlo, monospace;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  main {
+    flex: 1;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 3rem;
+  }
+
+  .page-intro {
+    text-align: center;
+    margin-bottom: 1.25rem;
+  }
+
+  .page-intro h1 {
+    margin: 0;
+    font-size: 1.3rem;
+  }
+
+  .page-intro .norad {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  .page-intro .window {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.4rem 0.75rem;
+    margin: 1.25rem 0;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .control-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .control-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .control-btn:hover,
+  .control-btn:focus-visible {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .control-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04121a;
+    font-weight: 600;
+  }
+
+  #status {
+    text-align: center;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    min-height: 1.2em;
+    margin-bottom: 0.75rem;
+  }
+
+  .notice {
+    border-radius: 6px;
+    padding: 0.65rem 0.85rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-bottom: 1rem;
+  }
+
+  .notice-truncated {
+    background: rgba(255, 180, 84, 0.1);
+    border: 1px solid rgba(255, 180, 84, 0.4);
+    color: #ffb454;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    padding: 2rem 1rem;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  table.results {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  table.results th,
+  table.results td {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table.results th {
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    background: var(--panel);
+  }
+
+  table.results tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  table.results tbody tr {
+    border-left: 3px solid transparent;
+  }
+
+  table.results .name {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  table.results .norad-id,
+  table.results .tle-age {
+    color: var(--text-dim);
+  }
+
+  table.results .relative {
+    color: var(--text-dim);
+  }
+
+  table.results .miss-distance {
+    font-weight: 700;
+  }
+
+  table.results a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.72rem;
+    margin-right: 0.6rem;
+    white-space: nowrap;
+  }
+
+  table.results a:hover,
+  table.results a:focus-visible {
+    text-decoration: underline;
+  }
+
+  tr.sev-close {
+    border-left-color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.08);
+  }
+
+  tr.sev-close .miss-distance {
+    color: #ff6b6b;
+  }
+
+  tr.sev-moderate {
+    border-left-color: #ffb454;
+    background: rgba(255, 180, 84, 0.05);
+  }
+
+  tr.sev-moderate .miss-distance {
+    color: #ffb454;
+  }
+
+  tr.sev-distant .miss-distance {
+    color: var(--accent);
+  }
+
+  .disclaimer {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .disclaimer a {
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+  <header class="kessler-header">
+    <a class="wordmark" href="/">kessler</a>
+    <nav class="kessler-nav">
+      <a href="/sky">Sky view</a>
+      <a href="/demo">World map</a>
+      <a href="/docs">API</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="page-intro">
+      <h1 id="target-name">Loading&hellip;</h1>
+      <div class="norad" id="target-norad">&mdash;</div>
+      <div class="window" id="window-range">&mdash;</div>
+    </div>
+
+    <div class="controls">
+      <div class="control-group">
+        <span>window</span>
+        <button class="control-btn" data-hours="24">24h</button>
+        <button class="control-btn" data-hours="72">72h</button>
+        <button class="control-btn" data-hours="168">7d</button>
+      </div>
+      <div class="control-group">
+        <span>threshold</span>
+        <button class="control-btn" data-threshold="5">5km</button>
+        <button class="control-btn" data-threshold="10">10km</button>
+        <button class="control-btn" data-threshold="25">25km</button>
+      </div>
+    </div>
+
+    <div id="status">Loading&hellip;</div>
+
+    <div id="truncated-notice" class="notice notice-truncated" style="display: none;">
+      Screening hit its time limit before checking the full catalog &mdash;
+      results below may be incomplete.
+    </div>
+
+    <div id="results"></div>
+
+    <div class="disclaimer" id="disclaimer">
+      Geometric miss distance only, computed from public TLEs via SGP4. This
+      is <strong>not</strong> a collision probability and does not account
+      for TLE covariance. See the <a href="/docs/accuracy">accuracy notes</a>
+      for what these numbers do and don't mean.
+    </div>
+  </main>
+
+  <footer class="kessler-footer">
+    <span>Data: <a href="https://celestrak.org/" target="_blank" rel="noopener">Celestrak</a></span>
+    <span class="sep">&middot;</span>
+    <span>Geometric miss distance only, not a collision probability &mdash;
+      <a href="/docs/accuracy">accuracy notes</a></span>
+    <span class="sep">&middot;</span>
+    <a href="/docs">API docs</a>
+  </footer>
+
+  <script>
+    // norad_id comes from the URL itself (/conjunctions/{norad_id}/view),
+    // not server-side templating -- this page is one static file for every
+    // target, same pattern as /sky and /demo.
+    var pathParts = window.location.pathname.split("/").filter(Boolean);
+    var NORAD_ID = pathParts[1];
+
+    var currentHours = 72;
+    var currentThreshold = 10;
+
+    var targetNameEl = document.getElementById("target-name");
+    var targetNoradEl = document.getElementById("target-norad");
+    var windowRangeEl = document.getElementById("window-range");
+    var statusEl = document.getElementById("status");
+    var truncatedNoticeEl = document.getElementById("truncated-notice");
+    var resultsEl = document.getElementById("results");
+
+    function formatUtc(isoString) {
+      var d = new Date(isoString);
+      return d.toUTCString().replace("GMT", "UTC");
+    }
+
+    function relativeTime(isoString) {
+      var target = new Date(isoString);
+      var now = new Date();
+      var diffMs = target.getTime() - now.getTime();
+      var future = diffMs >= 0;
+      var totalMinutes = Math.round(Math.abs(diffMs) / 60000);
+      var days = Math.floor(totalMinutes / 1440);
+      var hours = Math.floor((totalMinutes % 1440) / 60);
+      var minutes = totalMinutes % 60;
+
+      var parts = [];
+      if (days > 0) {
+        parts.push(days + (days === 1 ? " day" : " days"));
+        if (hours > 0) parts.push(hours + (hours === 1 ? " hour" : " hours"));
+      } else if (hours > 0) {
+        parts.push(hours + (hours === 1 ? " hour" : " hours"));
+        if (minutes > 0) parts.push(minutes + (minutes === 1 ? " minute" : " minutes"));
+      } else {
+        parts.push(minutes <= 1 ? "1 minute" : minutes + " minutes");
+      }
+
+      var joined = parts.join(" ");
+      return future ? "in " + joined : joined + " ago";
+    }
+
+    function severityClass(missDistanceKm, thresholdKm) {
+      if (missDistanceKm <= thresholdKm * 0.25) return "sev-close";
+      if (missDistanceKm <= thresholdKm * 0.6) return "sev-moderate";
+      return "sev-distant";
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    function renderResults(data) {
+      truncatedNoticeEl.style.display = data.truncated ? "block" : "none";
+
+      if (data.conjunctions.length === 0) {
+        resultsEl.innerHTML =
+          '<div class="empty-state">No conjunctions found in this window at this threshold.</div>';
+        return;
+      }
+
+      var rows = data.conjunctions.map(function (c) {
+        var sev = severityClass(c.miss_distance_km, data.threshold_km);
+        return (
+          '<tr class="' + sev + '">' +
+          "<td>" +
+            '<div class="name">' + escapeHtml(c.other_name) + "</div>" +
+            '<div class="norad-id">NORAD ' + c.other_norad_id + "</div>" +
+            '<a href="/sky">sky view &rarr;</a>' +
+            '<a href="/conjunctions/' + c.other_norad_id + '/view">conjunctions &rarr;</a>' +
+          "</td>" +
+          "<td>" +
+            "<div>" + formatUtc(c.tca_utc) + "</div>" +
+            '<div class="relative">' + relativeTime(c.tca_utc) + "</div>" +
+          "</td>" +
+          '<td class="miss-distance">' + c.miss_distance_km.toFixed(2) + " km</td>" +
+          '<td class="tle-age">target ' + c.target_epoch_age_hours.toFixed(1) + "h<br>" +
+            "other " + c.other_epoch_age_hours.toFixed(1) + "h</td>" +
+          "</tr>"
+        );
+      }).join("");
+
+      resultsEl.innerHTML =
+        '<div class="table-wrap"><table class="results">' +
+        "<thead><tr>" +
+        "<th>Object</th><th>Time of closest approach</th><th>Miss distance</th><th>TLE age</th>" +
+        "</tr></thead>" +
+        "<tbody>" + rows + "</tbody>" +
+        "</table></div>";
+    }
+
+    async function load() {
+      statusEl.textContent = "Loading…";
+      try {
+        var url =
+          "/conjunctions/" + NORAD_ID +
+          "?hours=" + currentHours +
+          "&threshold_km=" + currentThreshold;
+        var res = await fetch(url);
+        if (!res.ok) throw new Error("request failed: " + res.status);
+        var data = await res.json();
+
+        targetNameEl.textContent = data.target_name;
+        targetNoradEl.textContent = "NORAD ID " + data.target_norad_id;
+        windowRangeEl.textContent =
+          formatUtc(data.window_start_utc) + " → " + formatUtc(data.window_end_utc);
+        document.title = "kessler — " + data.target_name + " conjunctions";
+
+        renderResults(data);
+        statusEl.textContent = "last updated " + new Date().toLocaleTimeString();
+      } catch (err) {
+        statusEl.textContent = "Could not load conjunctions — retrying is safe, this won't self-retry.";
+        resultsEl.innerHTML =
+          '<div class="empty-state">Could not reach /conjunctions/' + NORAD_ID + ".</div>";
+      }
+    }
+
+    var hourButtons = document.querySelectorAll(".control-btn[data-hours]");
+    hourButtons.forEach(function (btn) {
+      if (Number(btn.dataset.hours) === currentHours) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        currentHours = Number(btn.dataset.hours);
+        hourButtons.forEach(function (b) { b.classList.toggle("active", b === btn); });
+        load();
+      });
+    });
+
+    var thresholdButtons = document.querySelectorAll(".control-btn[data-threshold]");
+    thresholdButtons.forEach(function (btn) {
+      if (Number(btn.dataset.threshold) === currentThreshold) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        currentThreshold = Number(btn.dataset.threshold);
+        thresholdButtons.forEach(function (b) { b.classList.toggle("active", b === btn); });
+        load();
+      });
+    });
+
+    if (!NORAD_ID) {
+      statusEl.textContent = "No NORAD ID in the URL.";
+    } else {
+      load();
+    }
+  </script>
+</body>
+</html>
