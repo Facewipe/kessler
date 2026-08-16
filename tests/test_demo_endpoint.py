@@ -1,5 +1,7 @@
 """Tests for GET /demo and GET /world.json."""
 
+import re
+
 from fastapi.testclient import TestClient
 
 from kessler.api import app
@@ -23,6 +25,36 @@ def test_demo_includes_shared_nav_and_footer() -> None:
     assert 'href="/demo" class="active"' in response.text
     assert "kessler-footer" in response.text
     assert "Celestrak" in response.text
+
+
+def test_demo_status_and_legend_are_stacked_not_fixed_overlays() -> None:
+    """Regression test: the status line and footer used to both be
+    `position: fixed` at a hardcoded `bottom` offset and would overlap on
+    narrow screens where the footer wraps to multiple lines. They must now
+    flow in normal document order inside a shared, non-fixed wrapper."""
+    response = client.get("/demo")
+
+    assert 'id="info-bar"' in response.text
+    info_bar_rule = re.search(r"#info-bar\s*\{[^}]*\}", response.text)
+    assert info_bar_rule is not None
+    assert "position: fixed" not in info_bar_rule.group()
+    assert "position:fixed" not in info_bar_rule.group()
+
+
+def test_demo_plots_a_live_catalog_sample_colored_by_regime() -> None:
+    """Regression test: the map used to plot a hardcoded list of ~20
+    curated satellites, one HTTP request each. It must now fetch a live,
+    server-sampled batch from the bulk positions endpoint and colour
+    markers by orbit regime (matching the sky view's legend), not by
+    fresh/stale TLE status."""
+    response = client.get("/demo")
+
+    assert "/satellites/positions" in response.text
+    assert "SATELLITES = [" not in response.text
+    assert "REGIME_COLOR" in response.text
+    assert "LEO (&lt;2000 km)" in response.text
+    assert "MEO (2000&ndash;35000 km)" in response.text
+    assert "GEO (&gt;35000 km)" in response.text
 
 
 def test_world_json_returns_land_polygons() -> None:

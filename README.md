@@ -76,16 +76,31 @@ marked active) and a footer (data source, the accuracy disclaimer linking to
 [`docs/accuracy.md`](docs/accuracy.md) — and a link to `/docs`), defined
 once in `kessler/static/shared.css`.
 
+### Positions for many satellites at once
+
+```bash
+curl "http://localhost:8000/satellites/positions?limit=300"
+```
+
+`limit` (1-1000, default 300) caps how many. Unlike
+`/satellites/{norad_id}/position`, this returns a batch in one request --
+built for plotting a live sample of the catalog on a map (see `/demo`
+below) without a round trip per object. The sample is a stride across the
+*whole* catalog (every Nth record by `norad_id`, not just the first
+`limit`), so it stays representative of the catalog rather than
+clustering however the DB happens to order rows. Reuses the same
+per-object `Satrec` cache as `/overhead` and `/conjunctions`.
+
 ### Live demo map
 
 `GET /demo` serves a self-contained HTML page (plain HTML/CSS/JS, no build
-step, no external dependencies) that plots live positions for a curated set
-of ~20 well-known satellites (ISS and others) on a 2D map, refreshed every
-30 seconds. Clicking a satellite opens a side panel with its position
-details and current conjunctions, pulled from the endpoints below. Stale
-(>72h) satellites are drawn in a distinct colour, per the legend on the
-page. It's a shop window for the API, not a product UI — satellites
-missing from your locally ingested catalog are skipped silently.
+step, no external dependencies) that plots a live sample of several hundred
+catalog objects (via `/satellites/positions`) on a 2D map, refreshed every
+30 seconds, coloured by orbit regime (LEO/MEO/GEO) with the same legend the
+sky view uses. Clicking a satellite opens a side panel with its position
+details and current conjunctions, pulled from the endpoints below; stale
+(>72h) satellites get a distinct marker outline. It's a shop window for the
+API, not a product UI.
 
 The map's coastlines come from `GET /world.json`, a small file of
 simplified land polygons built ahead of time by `scripts/build_map.py`
@@ -93,6 +108,12 @@ from [Natural Earth](https://www.naturalearthdata.com/) 110m land data
 and committed to the repo, so the demo page renders offline with no
 runtime download from a third party. Run `python scripts/build_map.py`
 to regenerate it.
+
+`/demo`'s `project()` (equirectangular lon/lat -> SVG coordinates) keeps
+the antimeridian (±180°) at the correct edge in each direction; naively
+folding both +180 and -180 to the same edge draws a spurious line all the
+way across the map at any latitude a ring happens to touch the antimeridian
+(this shipped once -- see `tests/test_world_map_projection.py`).
 
 ```bash
 open "http://localhost:8000/demo"

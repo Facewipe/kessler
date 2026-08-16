@@ -39,9 +39,51 @@
     padding: 1.5rem 1rem 3rem;
   }
 
+  /* Mobile-first: one column, list stacked under the chart. Above 900px
+     (plenty of room beside a ~460px chart for a readable list) this
+     becomes two columns instead -- the chart never resizes either way, so
+     the polar projection itself is untouched. */
+  .sky-layout {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .sky-column {
+    width: min(90vw, 460px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .sky-list-column {
+    width: min(90vw, 460px);
+  }
+
+  @media (min-width: 900px) {
+    .sky-layout {
+      max-width: 1000px;
+      flex-direction: row;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 2.5rem;
+    }
+
+    .sky-list-column {
+      flex: 1 1 360px;
+      min-width: 300px;
+      max-width: 420px;
+      max-height: 640px;
+      overflow-y: auto;
+      position: sticky;
+      top: 1.5rem;
+    }
+  }
+
   .page-intro {
     width: 100%;
-    max-width: 480px;
     text-align: center;
     margin-bottom: 0.25rem;
   }
@@ -210,6 +252,83 @@
     display: inline-block;
   }
 
+  .sat-list-heading {
+    margin: 0 0 0.6rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .sat-list-wrap {
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+
+  table.sat-list {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+  }
+
+  table.sat-list th,
+  table.sat-list td {
+    text-align: left;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  table.sat-list th {
+    position: sticky;
+    top: 0;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    background: var(--panel);
+  }
+
+  table.sat-list tbody tr {
+    cursor: pointer;
+  }
+
+  table.sat-list tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  table.sat-list tbody tr:hover,
+  table.sat-list tbody tr.hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  table.sat-list tbody tr.selected {
+    background: rgba(126, 227, 255, 0.14);
+  }
+
+  .sat-list-regime-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 0.4rem;
+  }
+
+  .sat-list-name {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .sat-list-empty {
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-dim);
+  }
+
   #tooltip {
     position: fixed;
     display: none;
@@ -282,39 +401,61 @@
   </header>
 
   <main>
-    <div class="page-intro">
-      <h1>kessler &mdash; sky view</h1>
-      <div id="location">Locating&hellip;</div>
-    </div>
+    <div class="sky-layout">
+      <div class="sky-column">
+        <div class="page-intro">
+          <h1>kessler &mdash; sky view</h1>
+          <div id="location">Locating&hellip;</div>
+        </div>
 
-    <div id="headline"><span class="n">&mdash;</span> satellites above you right now</div>
-    <div id="status">&nbsp;</div>
+        <div id="headline"><span class="n">&mdash;</span> satellites above you right now</div>
+        <div id="status">&nbsp;</div>
 
-    <div id="controls">
-      <span class="label">min elevation</span>
-      <button class="elev-btn" data-elevation="10">10&deg;</button>
-      <button class="elev-btn" data-elevation="30">30&deg;</button>
-      <button class="elev-btn" data-elevation="60">60&deg;</button>
-    </div>
+        <div id="controls">
+          <span class="label">min elevation</span>
+          <button class="elev-btn" data-elevation="10">10&deg;</button>
+          <button class="elev-btn" data-elevation="30">30&deg;</button>
+          <button class="elev-btn" data-elevation="60">60&deg;</button>
+        </div>
 
-    <div id="chart-wrap">
-      <svg id="chart" viewBox="0 0 400 400">
-        <circle class="rim" cx="200" cy="200" r="170"></circle>
-        <line class="crosshair" x1="30" y1="200" x2="370" y2="200"></line>
-        <line class="crosshair" x1="200" y1="30" x2="200" y2="370"></line>
-        <g id="rings"></g>
-        <text class="compass-label" x="200" y="16">N</text>
-        <text class="compass-label" x="384" y="200">E</text>
-        <text class="compass-label" x="200" y="386">S</text>
-        <text class="compass-label" x="16" y="200">W</text>
-        <g id="sky-layer"></g>
-      </svg>
-    </div>
+        <div id="chart-wrap">
+          <svg id="chart" viewBox="0 0 400 400">
+            <circle class="rim" cx="200" cy="200" r="170"></circle>
+            <line class="crosshair" x1="30" y1="200" x2="370" y2="200"></line>
+            <line class="crosshair" x1="200" y1="30" x2="200" y2="370"></line>
+            <g id="rings"></g>
+            <text class="compass-label" x="200" y="16">N</text>
+            <text class="compass-label" x="384" y="200">E</text>
+            <text class="compass-label" x="200" y="386">S</text>
+            <text class="compass-label" x="16" y="200">W</text>
+            <g id="sky-layer"></g>
+          </svg>
+        </div>
 
-    <div id="legend">
-      <div class="item"><span class="swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</div>
-      <div class="item"><span class="swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</div>
-      <div class="item"><span class="swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</div>
+        <div id="legend">
+          <div class="item"><span class="swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</div>
+          <div class="item"><span class="swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</div>
+          <div class="item"><span class="swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</div>
+        </div>
+      </div>
+
+      <div class="sky-list-column">
+        <h2 class="sat-list-heading">Overhead now</h2>
+        <div class="sat-list-wrap">
+          <table class="sat-list">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>NORAD</th>
+                <th>Elev</th>
+                <th>Az</th>
+                <th>Range</th>
+              </tr>
+            </thead>
+            <tbody id="sat-list-body"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div id="tooltip"></div>
@@ -350,6 +491,7 @@
     var locationEl = document.getElementById("location");
     var statusEl = document.getElementById("status");
     var tooltipEl = document.getElementById("tooltip");
+    var satListBody = document.getElementById("sat-list-body");
 
     var observer = null;
     var currentMinElevation = 10;
@@ -456,11 +598,28 @@
       return best ? best.closest(".sat-marker") : null;
     }
 
+    // Bidirectional: hovering a chart dot highlights its list row and
+    // hovering a list row highlights its chart dot (rowForMarker below
+    // wires the latter direction in), via the same satIndex entry both
+    // representations share.
+    function rowForMarker(marker) {
+      var entry = marker && satIndex[marker.dataset.noradId];
+      return entry ? entry.row : null;
+    }
+
     function setHovered(marker) {
       if (hoveredMarker === marker) return;
-      if (hoveredMarker) hoveredMarker.classList.remove("hover");
+      if (hoveredMarker) {
+        hoveredMarker.classList.remove("hover");
+        var prevRow = rowForMarker(hoveredMarker);
+        if (prevRow) prevRow.classList.remove("hover");
+      }
       hoveredMarker = marker;
-      if (hoveredMarker) hoveredMarker.classList.add("hover");
+      if (hoveredMarker) {
+        hoveredMarker.classList.add("hover");
+        var row = rowForMarker(hoveredMarker);
+        if (row) row.classList.add("hover");
+      }
     }
 
     function hideTooltip() {
@@ -469,6 +628,8 @@
       lastTooltipPos = null;
       var selected = skyLayer.querySelector(".sat-marker.selected");
       if (selected) selected.classList.remove("selected");
+      var selectedRow = satListBody.querySelector("tr.selected");
+      if (selectedRow) selectedRow.classList.remove("selected");
     }
 
     function showTooltip(sat, clientX, clientY) {
@@ -504,6 +665,11 @@
       if (previous && previous !== marker) previous.classList.remove("selected");
       if (marker) marker.classList.add("selected");
 
+      var previousRow = satListBody.querySelector("tr.selected");
+      var row = entry ? entry.row : null;
+      if (previousRow && previousRow !== row) previousRow.classList.remove("selected");
+      if (row) row.classList.add("selected");
+
       tooltipEl.querySelector(".tooltip-close").addEventListener("click", function (e) {
         e.stopPropagation();
         hideTooltip();
@@ -529,9 +695,18 @@
       headlineN.textContent = data.count;
       updateRings(currentMinElevation);
       skyLayer.innerHTML = "";
+      satListBody.innerHTML = "";
       satIndex = {};
       hoveredMarker = null;
 
+      if (data.satellites.length === 0) {
+        var emptyRow = document.createElement("tr");
+        emptyRow.innerHTML = '<td class="sat-list-empty" colspan="5">Nothing above the horizon right now.</td>';
+        satListBody.appendChild(emptyRow);
+      }
+
+      // Already sorted by elevation descending (see GET /overhead), so the
+      // list needs no client-side sort to match that order.
       data.satellites.forEach(function (sat) {
         var point = polarPoint(sat.azimuth_deg, sat.elevation_deg, currentMinElevation);
         var regime = regimeFor(sat.alt_km);
@@ -574,7 +749,32 @@
         });
 
         skyLayer.appendChild(group);
-        satIndex[sat.norad_id] = { sat: sat, group: group };
+
+        var row = document.createElement("tr");
+        row.dataset.noradId = sat.norad_id;
+        if (sat.norad_id === selectedNoradId) row.classList.add("selected");
+        row.innerHTML =
+          "<td>" +
+            '<span class="sat-list-regime-dot" style="background: ' + REGIME_COLOR[regime] + ';"></span>' +
+            '<span class="sat-list-name">' + escapeHtml(sat.name) + "</span>" +
+          "</td>" +
+          "<td>" + sat.norad_id + "</td>" +
+          "<td>" + sat.elevation_deg.toFixed(1) + "&deg;</td>" +
+          "<td>" + sat.azimuth_deg.toFixed(1) + "&deg;</td>" +
+          "<td>" + sat.range_km.toFixed(0) + " km</td>";
+        row.addEventListener("mouseenter", function () {
+          setHovered(group);
+        });
+        row.addEventListener("mouseleave", function () {
+          setHovered(null);
+        });
+        row.addEventListener("click", function (e) {
+          e.stopPropagation();
+          selectSatFromMarker(group);
+        });
+        satListBody.appendChild(row);
+
+        satIndex[sat.norad_id] = { sat: sat, group: group, row: row };
       });
 
       if (selectedNoradId && !satIndex[selectedNoradId]) hideTooltip();

@@ -12,6 +12,9 @@
     --coast: #3d5a86;
     --marker: #7ee3ff;
     --marker-stale: #ffb454;
+    --leo: #7ee3ff;
+    --meo: #ffb454;
+    --geo: #ff6bcb;
   }
 
   * { box-sizing: border-box; }
@@ -19,10 +22,15 @@
   html, body {
     margin: 0;
     padding: 0;
-    height: 100%;
     background: var(--ocean);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
   }
 
   .kessler-header {
@@ -41,25 +49,14 @@
     pointer-events: auto;
   }
 
-  .kessler-footer {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10;
-    border-top: none;
-    padding: 0.5rem 1rem;
-    background: linear-gradient(to top, rgba(16, 27, 46, 0.95), rgba(16, 27, 46, 0));
-    pointer-events: none;
-  }
-
-  .kessler-footer a {
-    pointer-events: auto;
-  }
-
+  /* Status/legend/footer are normal document flow, stacked in a column, so
+     they can never overlap regardless of how tall any of them get (e.g. the
+     footer wrapping to three lines on a narrow phone) -- the map (flex: 1)
+     simply gets less height instead. */
   #map-container {
-    position: absolute;
-    inset: 0;
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 220px;
   }
 
   svg#map {
@@ -84,38 +81,50 @@
   }
 
   .satellite.stale {
-    fill: var(--marker-stale);
+    stroke: var(--marker-stale);
+    stroke-width: 0.6;
   }
 
   .satellite:hover {
     stroke: #ffffff;
-    stroke-width: 0.5;
+    stroke-width: 0.6;
   }
 
-  #status {
-    position: fixed;
-    bottom: 2.5rem;
-    left: 1rem;
+  /* Mobile-first: status and legend always get their own full-width row,
+     each wrapping its own content if needed, so nothing ever has to shrink
+     below its content width inside a row it shares with something else --
+     that's what pushed content past the viewport edge instead of wrapping.
+     Widened back to a single side-by-side row once there's comfortably
+     enough width for both (see the min-width media query below). */
+  #info-bar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
     font-size: 0.75rem;
     color: var(--text-dim);
-    z-index: 10;
   }
 
   #legend {
-    position: fixed;
-    bottom: 2.5rem;
-    right: 1rem;
     display: flex;
-    gap: 1rem;
-    font-size: 0.75rem;
-    color: var(--text-dim);
-    z-index: 10;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+  }
+
+  @media (min-width: 700px) {
+    #info-bar {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+    }
   }
 
   .legend-item {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
+    white-space: nowrap;
   }
 
   .legend-swatch {
@@ -123,14 +132,6 @@
     height: 0.6rem;
     border-radius: 50%;
     display: inline-block;
-  }
-
-  .legend-swatch.fresh {
-    background: var(--marker);
-  }
-
-  .legend-swatch.stale {
-    background: var(--marker-stale);
   }
 
   #panel {
@@ -272,11 +273,13 @@
     </svg>
   </div>
 
-  <div id="status">Loading satellite positions&hellip;</div>
-
-  <div id="legend">
-    <span class="legend-item"><span class="legend-swatch fresh"></span>fresh TLE</span>
-    <span class="legend-item"><span class="legend-swatch stale"></span>stale TLE (&gt;72h)</span>
+  <div id="info-bar">
+    <div id="status">Loading satellite positions&hellip;</div>
+    <div id="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--leo);"></span>LEO (&lt;2000 km)</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--meo);"></span>MEO (2000&ndash;35000 km)</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: var(--geo);"></span>GEO (&gt;35000 km)</span>
+    </div>
   </div>
 
   <div id="panel">
@@ -312,34 +315,19 @@
   </footer>
 
   <script>
-    // Curated set of well-known, long-lived satellites. Any id that 404s
-    // (not present in the locally ingested catalog) is skipped silently.
-    var SATELLITES = [
-      25544, // ISS (ZARYA)
-      20580, // HST
-      25994, // TERRA
-      27424, // AQUA
-      28376, // AURA
-      28654, // NOAA 18
-      33591, // NOAA 19
-      39084, // LANDSAT 8
-      37849, // SUOMI NPP
-      41866, // GOES 16
-      43013, // NOAA 20
-      43226, // GOES 17
-      49260, // LANDSAT 9
-      39634, // SENTINEL-1A
-      40697, // SENTINEL-2A
-      41335, // SENTINEL-3A
-      39574, // GPM CORE OBSERVATORY
-      43613, // ICESAT-2
-      41240, // JASON-3
-      48274  // CSS (TIANHE)
-    ];
-
+    var SAMPLE_SIZE = 300;
     var REFRESH_MS = 30000;
     var STALE_HOURS = 72;
     var WORLD_JSON_URL = "/world.json";
+    var POSITIONS_URL = "/satellites/positions?limit=" + SAMPLE_SIZE;
+
+    var REGIME_COLOR = { LEO: "#7ee3ff", MEO: "#ffb454", GEO: "#ff6bcb" };
+
+    function regimeFor(altKm) {
+      if (altKm < 2000) return "LEO";
+      if (altKm <= 35000) return "MEO";
+      return "GEO";
+    }
 
     var svgNS = "http://www.w3.org/2000/svg";
     var landLayer = document.getElementById("land-layer");
@@ -350,6 +338,16 @@
 
     function project(lon, lat) {
       var normLon = ((lon + 180) % 360 + 360) % 360 - 180;
+      // The modulo above maps the antimeridian to -180 regardless of which
+      // side lon came from, so +180 (e.g. Antarctica's and Eurasia's
+      // coastline rings, which touch the antimeridian exactly after
+      // world.json's coordinate rounding) collapses onto -180's x=0 instead
+      // of staying at the right edge (x=360). That single-pixel-wide fold
+      // turns "coastline point at the right edge" into "coastline point at
+      // the left edge", drawing a spurious edge-to-edge line at that
+      // latitude. Keep +180 in place: only fold when the *input* wasn't
+      // already at -180 (an unadjusted -180 input should stay at x=0).
+      if (normLon === -180 && lon > -180) normLon = 180;
       return { x: normLon + 180, y: 90 - lat };
     }
 
@@ -394,32 +392,39 @@
       }
     }
 
-    async function refreshOne(id) {
-      try {
-        var res = await fetch("/satellites/" + id + "/position");
-        if (!res.ok) {
-          removeMarker(id);
-          delete latest[id];
-          return;
-        }
-        var data = await res.json();
-        latest[id] = data;
-        var pos = project(data.lon, data.lat);
-        var circle = markerFor(id);
-        circle.setAttribute("cx", pos.x);
-        circle.setAttribute("cy", pos.y);
-        circle.classList.toggle("stale", !!data.stale);
-      } catch (err) {
-        removeMarker(id);
-        delete latest[id];
-      }
-    }
-
     async function refreshAll() {
-      await Promise.all(SATELLITES.map(refreshOne));
-      var count = Object.keys(latest).length;
-      statusEl.textContent = count + "/" + SATELLITES.length +
-        " satellites tracked — last update " + new Date().toLocaleTimeString();
+      try {
+        var res = await fetch(POSITIONS_URL);
+        if (!res.ok) throw new Error("request failed: " + res.status);
+        var data = await res.json();
+
+        var seenIds = {};
+        data.satellites.forEach(function (sat) {
+          seenIds[sat.norad_id] = true;
+          latest[sat.norad_id] = sat;
+
+          var pos = project(sat.lon, sat.lat);
+          var circle = markerFor(sat.norad_id);
+          circle.setAttribute("cx", pos.x);
+          circle.setAttribute("cy", pos.y);
+          circle.setAttribute("fill", REGIME_COLOR[regimeFor(sat.alt_km)]);
+          circle.classList.toggle("stale", !!sat.stale);
+        });
+
+        // Drop markers for satellites that fell out of this refresh's
+        // sample (e.g. the catalog changed) instead of leaving stale dots.
+        Object.keys(markers).forEach(function (id) {
+          if (!seenIds[id]) {
+            removeMarker(id);
+            delete latest[id];
+          }
+        });
+
+        statusEl.textContent = data.count + " satellites tracked — last update " +
+          new Date().toLocaleTimeString();
+      } catch (err) {
+        statusEl.textContent = "Could not load satellite positions — retrying…";
+      }
     }
 
     var panel = document.getElementById("panel");
