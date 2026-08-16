@@ -588,6 +588,110 @@ async def get_position(
     }
 
 
+DEFAULT_POSITIONS_SAMPLE_SIZE = 300
+MAX_POSITIONS_SAMPLE_SIZE = 1000
+
+
+@app.get(
+    "/satellites/positions",
+    tags=["satellites"],
+    summary="Current positions for a live sample of the catalog",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "at": "2026-08-16T12:00:00+00:00",
+                        "count": 2,
+                        "satellites": [
+                            {
+                                "norad_id": 25544,
+                                "name": "ISS (ZARYA)",
+                                "lat": 12.345,
+                                "lon": -45.679,
+                                "alt_km": 420.123,
+                                "epoch_age_hours": 5.1,
+                                "stale": False,
+                            },
+                            {
+                                "norad_id": 43013,
+                                "name": "NOAA 20",
+                                "lat": -32.1,
+                                "lon": 88.4,
+                                "alt_km": 824.6,
+                                "epoch_age_hours": 11.4,
+                                "stale": False,
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+        422: {"description": "`limit` outside its allowed range"},
+    },
+)
+async def get_positions_sample(
+    limit: int = Query(
+        default=DEFAULT_POSITIONS_SAMPLE_SIZE,
+        ge=1,
+        le=MAX_POSITIONS_SAMPLE_SIZE,
+        description="Maximum number of satellites to return.",
+    ),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, object]:
+    """Return current geodetic positions for a spread sample of the catalog.
+
+    Unlike `/satellites/{norad_id}/position` (one object, one request), this
+    returns many at once -- e.g. for plotting a live sample of the catalog
+    on a map -- without a round trip per object. The sample is a stride
+    across the full, catalog-order-independent catalog (every Nth record,
+    not just the first `limit`), so it spans the whole catalog rather than
+    clustering however the DB happens to order rows. Records whose TLE
+    fails to propagate are silently skipped, consistent with `/overhead`.
+
+    Reuses the same per-object `Satrec` cache as `/overhead` and
+    `/conjunctions` (see `kessler/catalog_cache.py`); a few hundred
+    propagations is cheap enough to run directly on the event loop, unlike
+    those two.
+    """
+    at = datetime.now(UTC)
+    catalog = list_satellites(conn)
+    catalog_cache = get_cached_catalog(catalog)
+
+    stride = max(1, len(catalog) // limit) if catalog else 1
+    sample = catalog[::stride][:limit]
+
+    satellites = []
+    for record in sample:
+        cached = catalog_cache.get(record.norad_id)
+        satrec = (
+            cached.satrec if cached is not None else satrec_from_tle(record.line1, record.line2)
+        )
+        try:
+            position = position_at(satrec, at)
+        except PropagationError:
+            continue
+
+        epoch_age_hours = (at - epoch_datetime(satrec)).total_seconds() / 3600
+        satellites.append(
+            {
+                "norad_id": record.norad_id,
+                "name": record.name,
+                "lat": round(position.lat_deg, 3),
+                "lon": round(position.lon_deg, 3),
+                "alt_km": round(position.alt_km, 3),
+                "epoch_age_hours": round(epoch_age_hours, 3),
+                "stale": epoch_age_hours > STALE_THRESHOLD_HOURS,
+            }
+        )
+
+    return {
+        "at": at.isoformat(),
+        "count": len(satellites),
+        "satellites": satellites,
+    }
+
+
 @app.get(
     "/conjunctions/{norad_id}",
     tags=["conjunctions"],
