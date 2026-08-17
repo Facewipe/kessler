@@ -7,9 +7,13 @@
 <link rel="stylesheet" href="/static/shared.css">
 <style>
   :root {
-    --ocean: #0d1524;
-    --land: #1e2c44;
-    --coast: #3d5a86;
+    /* Land was only barely lighter than the ocean (relative-luminance
+       contrast ~1.1:1), so coastlines were the only thing distinguishing
+       land from sea and landmasses read as flat. Widened the land/ocean
+       gap to ~2.8:1 while keeping the same dark, low-saturation palette. */
+    --ocean: #0a0f1a;
+    --land: #3a5c8c;
+    --coast: #7ea6d8;
     --marker: #7ee3ff;
     --marker-stale: #ffb454;
     --leo: #7ee3ff;
@@ -68,6 +72,20 @@
 
   .landmass {
     fill: var(--land);
+    stroke: var(--coast);
+    stroke-width: 0.3;
+    vector-effect: non-scaling-stroke;
+  }
+
+  /* ne_110m_land has no interior rings for large inland water bodies (the
+     Great Lakes, Lake Baikal, Lake Victoria, ...), so it renders them as
+     land. Drawn on top of the land layer in the ocean colour instead of
+     trying to punch an actual hole in the land polygons. (The Caspian Sea
+     is classified as a sea rather than a lake by Natural Earth, so it
+     isn't in this dataset and still renders as land -- see
+     scripts/build_map.py.) */
+  .lake {
+    fill: var(--ocean);
     stroke: var(--coast);
     stroke-width: 0.3;
     vector-effect: non-scaling-stroke;
@@ -266,9 +284,10 @@
 
   <div id="map-container">
     <svg id="map" viewBox="0 0 360 180" preserveAspectRatio="xMidYMid meet">
-      <rect x="0" y="0" width="360" height="180" fill="#0d1524"></rect>
+      <rect x="0" y="0" width="360" height="180" fill="#0a0f1a"></rect>
 
       <g id="land-layer"></g>
+      <g id="lake-layer"></g>
       <g id="satellite-layer"></g>
     </svg>
   </div>
@@ -330,11 +349,48 @@
     }
 
     var svgNS = "http://www.w3.org/2000/svg";
+    var mapContainer = document.getElementById("map-container");
+    var mapSvg = document.getElementById("map");
     var landLayer = document.getElementById("land-layer");
+    var lakeLayer = document.getElementById("lake-layer");
     var satelliteLayer = document.getElementById("satellite-layer");
     var statusEl = document.getElementById("status");
     var markers = {};
     var latest = {};
+
+    // The map's natural (lon, lat) space is 360 x 180 -- a 2:1 rect. On a
+    // portrait phone, #map-container (flex: 1, so it fills the available
+    // viewport height) is much taller than it is wide, and a fixed 0 0 360
+    // 180 viewBox with preserveAspectRatio="meet" fits that by shrinking to
+    // the container's *width*, leaving a huge letterboxed strip of plain
+    // ocean above and below the actual map. Rather than crop the map to
+    // fill the container (which would chop off longitude range on a narrow
+    // screen) or distort it (stretching lat/lon non-uniformly), grow the
+    // viewBox on whichever axis the container is more generous on, centered
+    // on the equator/prime meridian, so the rendered map always exactly
+    // fills the container at a uniform scale -- the "extra" canvas is just
+    // more ocean, drawn the same colour as the rest of it, not empty space.
+    var BASE_WIDTH = 360;
+    var BASE_HEIGHT = 180;
+
+    function fitMapViewBox() {
+      var rect = mapContainer.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      var containerAspect = rect.width / rect.height;
+      var baseAspect = BASE_WIDTH / BASE_HEIGHT;
+      var width = BASE_WIDTH;
+      var height = BASE_HEIGHT;
+      if (containerAspect > baseAspect) {
+        width = BASE_HEIGHT * containerAspect;
+      } else {
+        height = BASE_WIDTH / containerAspect;
+      }
+
+      var minX = (BASE_WIDTH - width) / 2;
+      var minY = (BASE_HEIGHT - height) / 2;
+      mapSvg.setAttribute("viewBox", minX + " " + minY + " " + width + " " + height);
+    }
 
     function project(lon, lat) {
       var normLon = ((lon + 180) % 360 + 360) % 360 - 180;
@@ -351,22 +407,30 @@
       return { x: normLon + 180, y: 90 - lat };
     }
 
+    function drawPolygons(polygons, layer, cssClass) {
+      polygons.forEach(function (polygon) {
+        if (!polygon.length) return;
+        var d = polygon.map(function (point, i) {
+          var pos = project(point[0], point[1]);
+          return (i === 0 ? "M" : "L") + pos.x + " " + pos.y;
+        }).join(" ") + " Z";
+        var path = document.createElementNS(svgNS, "path");
+        path.setAttribute("class", cssClass);
+        path.setAttribute("d", d);
+        layer.appendChild(path);
+      });
+    }
+
     async function loadWorldMap() {
       try {
         var res = await fetch(WORLD_JSON_URL);
         if (!res.ok) return;
-        var polygons = await res.json();
-        polygons.forEach(function (polygon) {
-          if (!polygon.length) return;
-          var d = polygon.map(function (point, i) {
-            var pos = project(point[0], point[1]);
-            return (i === 0 ? "M" : "L") + pos.x + " " + pos.y;
-          }).join(" ") + " Z";
-          var path = document.createElementNS(svgNS, "path");
-          path.setAttribute("class", "landmass");
-          path.setAttribute("d", d);
-          landLayer.appendChild(path);
-        });
+        var data = await res.json();
+        drawPolygons(data.land, landLayer, "landmass");
+        // Drawn in the ocean colour on top of the land layer -- see the
+        // .lake rule -- since ne_110m_land has no cutouts for large inland
+        // water bodies like the Great Lakes or Lake Baikal.
+        drawPolygons(data.lakes, lakeLayer, "lake");
       } catch (err) {
         // Offline/blocked fetch: fall back to a bare ocean background.
       }
@@ -489,6 +553,10 @@
         listEl.textContent = "Could not load conjunctions.";
       }
     }
+
+    fitMapViewBox();
+    window.addEventListener("resize", fitMapViewBox);
+    window.addEventListener("orientationchange", fitMapViewBox);
 
     loadWorldMap();
     refreshAll();
