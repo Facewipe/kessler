@@ -144,6 +144,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="kessler",
     description=(
+        # Swagger UI renders `info.description` as Markdown, so these links
+        # are how /docs stops being a dead end -- otherwise it's the one
+        # page on the site with no way back to the rest of it.
+        "[Home](/) &middot; [Sky view](/sky) &middot; [World map](/demo)\n\n"
         "Satellite conjunction screening API built on open orbital data "
         "(Celestrak GP/TLE data, propagated via SGP4).\n\n"
         "TLE-based propagation is roughly km-level accurate near a TLE's "

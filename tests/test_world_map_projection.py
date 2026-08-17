@@ -65,7 +65,8 @@ def test_world_json_antimeridian_points_project_to_opposite_edges() -> None:
     """Every point in the real, shipped world.json that sits exactly on the
     antimeridian must project to the correct edge -- this is what actually
     broke in production, not just the formula in isolation."""
-    polygons = json.loads(WORLD_JSON_PATH.read_text(encoding="utf-8"))
+    data = json.loads(WORLD_JSON_PATH.read_text(encoding="utf-8"))
+    polygons = data["land"] + data["lakes"]
 
     checked_positive = 0
     checked_negative = 0
@@ -93,7 +94,8 @@ def test_world_json_rings_have_no_unexplained_wide_jumps() -> None:
     points implying a >180 degree raw longitude jump -- that would indicate
     an unclosed or otherwise malformed ring, which would misrender the same
     way regardless of the projection fix."""
-    polygons = json.loads(WORLD_JSON_PATH.read_text(encoding="utf-8"))
+    data = json.loads(WORLD_JSON_PATH.read_text(encoding="utf-8"))
+    polygons = data["land"] + data["lakes"]
 
     offending: list[tuple[int, int]] = []
     for i, polygon in enumerate(polygons):

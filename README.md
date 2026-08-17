@@ -63,7 +63,9 @@ never make a network call).
 ## API
 
 Interactive OpenAPI docs (with request/response examples) are served at
-`/docs` once the app is running.
+`/docs` once the app is running. The OpenAPI description includes links
+back to the landing page, sky view, and world map, so `/docs` isn't a
+dead end.
 
 ### Landing page
 
@@ -103,11 +105,18 @@ details and current conjunctions, pulled from the endpoints below; stale
 API, not a product UI.
 
 The map's coastlines come from `GET /world.json`, a small file of
-simplified land polygons built ahead of time by `scripts/build_map.py`
-from [Natural Earth](https://www.naturalearthdata.com/) 110m land data
-and committed to the repo, so the demo page renders offline with no
-runtime download from a third party. Run `python scripts/build_map.py`
-to regenerate it.
+simplified land and lake polygons (`{"land": [...], "lakes": [...]}`)
+built ahead of time by `scripts/build_map.py` from [Natural
+Earth](https://www.naturalearthdata.com/) 110m land and lakes data and
+committed to the repo, so the demo page renders offline with no runtime
+download from a third party. The lakes are drawn in the ocean colour on
+top of the land layer -- `ne_110m_land` has no cutouts for large inland
+water bodies like the Great Lakes or Lake Baikal, so without this they'd
+render as land. (The Caspian Sea is classified as a sea rather than a
+lake by Natural Earth, so it's not in this dataset and still renders as
+land -- see the note in `scripts/build_map.py`.) Run
+`python scripts/build_map.py` to regenerate `world.json` (network access
+required, fetches both datasets fresh).
 
 `/demo`'s `project()` (equirectangular lon/lat -> SVG coordinates) keeps
 the antimeridian (±180°) at the correct edge in each direction; naively

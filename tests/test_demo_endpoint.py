@@ -57,18 +57,47 @@ def test_demo_plots_a_live_catalog_sample_colored_by_regime() -> None:
     assert "GEO (&gt;35000 km)" in response.text
 
 
-def test_world_json_returns_land_polygons() -> None:
+def test_world_json_returns_land_and_lake_polygons() -> None:
     response = client.get("/world.json")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
 
-    polygons = response.json()
-    assert isinstance(polygons, list)
-    assert len(polygons) > 0
-    for polygon in polygons:
-        assert len(polygon) >= 3
-        for point in polygon:
-            lon, lat = point
-            assert -180 <= lon <= 180
-            assert -90 <= lat <= 90
+    data = response.json()
+    assert isinstance(data, dict)
+    assert set(data.keys()) == {"land", "lakes"}
+
+    for key in ("land", "lakes"):
+        polygons = data[key]
+        assert isinstance(polygons, list)
+        assert len(polygons) > 0
+        for polygon in polygons:
+            assert len(polygon) >= 3
+            for point in polygon:
+                lon, lat = point
+                assert -180 <= lon <= 180
+                assert -90 <= lat <= 90
+
+
+def test_demo_renders_lakes_on_top_of_land_in_the_ocean_colour() -> None:
+    """Regression test: ne_110m_land has no cutouts for large inland water
+    bodies (the Great Lakes, Lake Baikal, ...), so they used to render as
+    land. Lakes must now be drawn in the ocean colour on top of the land
+    layer, not subtracted from it (no geometry library available)."""
+    response = client.get("/demo")
+
+    assert 'id="lake-layer"' in response.text
+    assert "data.lakes" in response.text
+    lake_rule = re.search(r"\.lake\s*\{[^}]*\}", response.text)
+    assert lake_rule is not None
+    assert "var(--ocean)" in lake_rule.group()
+
+
+def test_demo_widens_land_ocean_contrast() -> None:
+    """Regression test: --land and --ocean used to be nearly the same
+    tone (relative-luminance contrast ~1.1:1), so landmasses barely read
+    against the sea. Pins the widened palette."""
+    response = client.get("/demo")
+
+    assert "--ocean: #0a0f1a;" in response.text
+    assert "--land: #3a5c8c;" in response.text

@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
-"""Build kessler/static/world.json from Natural Earth 110m land data.
+"""Build kessler/static/world.json from Natural Earth 110m land/lakes data.
 
-Downloads the public-domain Natural Earth ``ne_110m_land`` shapefile,
-simplifies each ring with Douglas-Peucker, rounds coordinates to 2
-decimals, and writes a small JSON file of land polygons that the demo
-page loads at startup instead of drawing coastlines by hand.
+Downloads the public-domain Natural Earth ``ne_110m_land`` and
+``ne_110m_lakes`` shapefiles, simplifies each ring with Douglas-Peucker,
+rounds coordinates to 2 decimals, and writes a small JSON file of land and
+lake polygons that the demo page loads at startup instead of drawing
+coastlines by hand.
+
+``ne_110m_land`` has no interior rings cut out for large inland water
+bodies (the Great Lakes, Lake Baikal, Lake Victoria, ...), so on their
+own the land polygons render them as land. The lakes shapefile is fetched
+separately and shipped as its own polygon list, drawn in the ocean colour
+on top of the land layer, rather than trying to punch real holes in the
+land polygons.
+
+Note: Natural Earth classifies the Caspian Sea as a sea, not a lake, so
+it is *not* in ``ne_110m_lakes`` and still renders as land here -- fixing
+that would mean pulling it in from a different dataset
+(``ne_110m_geography_marine_polys``), which this script deliberately
+doesn't do, to keep this to one straightforward "fetch another
+shapefile, draw it over the land" step.
 
 Usage:
     python scripts/build_map.py
 
-No third-party dependencies: the shapefile is parsed directly from its
+No third-party dependencies: the shapefiles are parsed directly from their
 binary format (see the ESRI Shapefile Technical Description) since we
 only need polygon rings, not the full feature set a library like
 pyshp/geopandas would give us.
@@ -26,8 +41,13 @@ import zipfile
 from pathlib import Path
 
 NE_LAND_URL = "https://naturalearth.s3.amazonaws.com/110m_physical/ne_110m_land.zip"
+NE_LAKES_URL = "https://naturalearth.s3.amazonaws.com/110m_physical/ne_110m_lakes.zip"
 OUTPUT_PATH = Path(__file__).resolve().parent.parent / "kessler" / "static" / "world.json"
-SIZE_BUDGET_BYTES = 150 * 1024
+
+# Raised from the land-only 150 KB to cover the added lakes data (~15 KB at
+# the initial tolerance -- ne_110m_lakes is already coarse, only the
+# largest lakes are present at 110m resolution).
+SIZE_BUDGET_BYTES = 180 * 1024
 
 # Starting Douglas-Peucker tolerance in degrees; doubled until the output
 # fits the size budget.
@@ -53,8 +73,8 @@ def parse_polygon_rings(shp_bytes: bytes) -> list[list[tuple[float, float]]]:
     """Parse an ESRI shapefile of Polygon features into a list of rings.
 
     Each ring is a list of (lon, lat) tuples. Ring winding (outer vs hole)
-    is not distinguished: ne_110m_land has no interior water rings, so
-    every ring is land.
+    is not distinguished: neither ne_110m_land nor ne_110m_lakes has
+    interior rings, so every ring is a standalone filled shape.
     """
     rings: list[list[tuple[float, float]]] = []
     offset = 100  # fixed-length file header
@@ -117,34 +137,51 @@ def simplify_ring(
     return left[:-1] + right
 
 
-def build_world_json(rings: list[list[tuple[float, float]]], tolerance_deg: float) -> bytes:
-    """Simplify and round rings, returning the encoded JSON bytes."""
+def simplify_and_round(
+    rings: list[list[tuple[float, float]]], tolerance_deg: float
+) -> list[list[list[float]]]:
+    """Simplify and round rings into JSON-ready polygons."""
     polygons = []
     for ring in rings:
         simplified = simplify_ring(ring, tolerance_deg)
         if len(simplified) < 3:
             continue
         polygons.append([[round(lon, 2), round(lat, 2)] for lon, lat in simplified])
+    return polygons
 
-    return json.dumps(polygons, separators=(",", ":")).encode("utf-8")
+
+def build_world_json(
+    land_rings: list[list[tuple[float, float]]],
+    lake_rings: list[list[tuple[float, float]]],
+    tolerance_deg: float,
+) -> bytes:
+    """Simplify and round both ring sets, returning the encoded JSON bytes."""
+    data = {
+        "land": simplify_and_round(land_rings, tolerance_deg),
+        "lakes": simplify_and_round(lake_rings, tolerance_deg),
+    }
+    return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
 
 def main() -> int:
-    print(f"Downloading {NE_LAND_URL} ...")
     try:
-        shp_bytes = download_shapefile_bytes(NE_LAND_URL)
+        print(f"Downloading {NE_LAND_URL} ...")
+        land_shp_bytes = download_shapefile_bytes(NE_LAND_URL)
+        print(f"Downloading {NE_LAKES_URL} ...")
+        lake_shp_bytes = download_shapefile_bytes(NE_LAKES_URL)
     except OSError as exc:
         print(f"error: could not download Natural Earth data: {exc}", file=sys.stderr)
         return 1
 
-    rings = parse_polygon_rings(shp_bytes)
-    print(f"Parsed {len(rings)} rings from the shapefile.")
+    land_rings = parse_polygon_rings(land_shp_bytes)
+    lake_rings = parse_polygon_rings(lake_shp_bytes)
+    print(f"Parsed {len(land_rings)} land rings and {len(lake_rings)} lake rings.")
 
     tolerance_deg = INITIAL_TOLERANCE_DEG
-    encoded = build_world_json(rings, tolerance_deg)
+    encoded = build_world_json(land_rings, lake_rings, tolerance_deg)
     while len(encoded) > SIZE_BUDGET_BYTES and tolerance_deg < MAX_TOLERANCE_DEG:
         tolerance_deg *= 2
-        encoded = build_world_json(rings, tolerance_deg)
+        encoded = build_world_json(land_rings, lake_rings, tolerance_deg)
 
     OUTPUT_PATH.write_bytes(encoded)
     print(f"Wrote {OUTPUT_PATH} ({len(encoded) / 1024:.1f} KB, tolerance={tolerance_deg:.3f} deg)")
